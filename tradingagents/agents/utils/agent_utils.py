@@ -34,13 +34,16 @@ def get_language_instruction() -> str:
     return f" Write your entire response in {lang}."
 
 
-def build_instrument_context(ticker: str) -> str:
+def build_instrument_context(ticker: str, company_name: str = "") -> str:
     """Describe the exact instrument so agents preserve exchange-qualified tickers."""
-    return (
-        f"The instrument to analyze is `{ticker}`. "
+    ctx = f"The instrument to analyze is `{ticker}`. "
+    if company_name:
+        ctx += f"The company name is {company_name}. "
+    ctx += (
         "Use this exact ticker in every tool call, report, and recommendation, "
-        "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`)."
+        "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `.SS`, `.SZ`)."
     )
+    return ctx
 
 def create_msg_delete():
     def delete_messages(state):
