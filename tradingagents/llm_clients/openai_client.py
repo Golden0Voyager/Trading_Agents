@@ -60,21 +60,44 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
        fails with HTTP 400. ``_create_chat_result`` captures the field on
        receive and ``_get_request_payload`` re-attaches it on send.
 
+       LangChain's ``ChatPromptTemplate`` (used by TradingAgents analysts)
+       creates *new* message objects that strip ``additional_kwargs``.
+       To survive that transformation we keep a small sidecar cache keyed
+       by ``message.id`` – an id that *is* preserved across the template.
+
     2. **deepseek-reasoner has no tool_choice.** Structured output via
        function-calling is unavailable, so we raise NotImplementedError
        and let the agent factories fall back to free-text generation
        (see ``tradingagents/agents/utils/structured.py``).
     """
 
+    # Sidecar cache: message id -> reasoning_content.
+    # Shared across instances because get_llm() may create fresh objects.
+    _reasoning_cache: dict[str, str] = {}
+    _REASONING_CACHE_MAX = 2000
+
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         outgoing = payload.get("messages", [])
         for message_dict, message in zip(outgoing, _input_to_messages(input_)):
-            if not isinstance(message, AIMessage):
+            if message_dict.get("role") != "assistant":
                 continue
-            reasoning = message.additional_kwargs.get("reasoning_content")
-            if reasoning is not None:
-                message_dict["reasoning_content"] = reasoning
+            if "reasoning_content" in message_dict:
+                continue
+            # 1) sidecar cache keyed by message id (survives ChatPromptTemplate)
+            msg_id = getattr(message, "id", None)
+            if msg_id and msg_id in self._reasoning_cache:
+                message_dict["reasoning_content"] = self._reasoning_cache[msg_id]
+                continue
+            # 2) original AIMessage additional_kwargs (direct invoke path)
+            if isinstance(message, AIMessage):
+                reasoning = message.additional_kwargs.get("reasoning_content")
+                if reasoning is not None:
+                    message_dict["reasoning_content"] = reasoning
+                    continue
+            # 3) fallback: assistant with tool_calls needs a non-empty field
+            if message_dict.get("tool_calls"):
+                message_dict["reasoning_content"] = "..."
         return payload
 
     def _create_chat_result(self, response, generation_info=None):
@@ -92,6 +115,13 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
             reasoning = choice.get("message", {}).get("reasoning_content")
             if reasoning is not None:
                 generation.message.additional_kwargs["reasoning_content"] = reasoning
+                msg_id = getattr(generation.message, "id", None)
+                if msg_id:
+                    cache = self._reasoning_cache
+                    cache[msg_id] = reasoning
+                    # simple LRU-ish eviction
+                    while len(cache) > self._REASONING_CACHE_MAX:
+                        cache.pop(next(iter(cache)))
         return chat_result
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
@@ -117,6 +147,7 @@ _PROVIDER_CONFIG = {
     "glm": ("https://api.z.ai/api/paas/v4/", "ZHIPU_API_KEY"),
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "ollama": ("http://localhost:11434/v1", None),
+    "sensenova": ("https://api.sensenova.cn/compatible-mode/v2", "SENSENOVA_API_KEY"),
 }
 
 
@@ -171,7 +202,7 @@ class OpenAIClient(BaseLLMClient):
 
         # DeepSeek's thinking-mode quirks live in their own subclass so the
         # base NormalizedChatOpenAI stays free of provider-specific branches.
-        chat_cls = DeepSeekChatOpenAI if self.provider == "deepseek" else NormalizedChatOpenAI
+        chat_cls = DeepSeekChatOpenAI if self.provider in ("deepseek", "sensenova") else NormalizedChatOpenAI
         return chat_cls(**llm_kwargs)
 
     def validate_model(self) -> bool:
