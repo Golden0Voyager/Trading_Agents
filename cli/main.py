@@ -509,6 +509,20 @@ def get_user_selections():
     )
     selected_ticker = get_ticker()
 
+    # Resolve ticker and display confirmation
+    from tradingagents.ticker_resolver import resolve_ticker
+    try:
+        resolved = resolve_ticker(selected_ticker)
+        if resolved.get("company_name"):
+            console.print(
+                f"[green]已解析: {resolved['company_name']} ({resolved['ticker']})[/green]"
+            )
+        else:
+            console.print(f"[green]已解析: {resolved['ticker']}[/green]")
+        selected_ticker = resolved["ticker"]
+    except Exception as e:
+        console.print(f"[yellow]解析提示: {e}[/yellow]")
+
     # Step 2: Analysis date
     default_date = datetime.datetime.now().strftime("%Y-%m-%d")
     console.print(
@@ -610,11 +624,6 @@ def get_user_selections():
         "anthropic_effort": anthropic_effort,
         "output_language": output_language,
     }
-
-
-def get_ticker():
-    """Get ticker symbol from user input."""
-    return typer.prompt("", default="SPY")
 
 
 def get_analysis_date():
@@ -723,6 +732,22 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
     # Write consolidated report
     header = f"# Trading Analysis Report: {ticker}\n\nGenerated: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
     (save_path / "complete_report.md").write_text(header + "\n\n".join(sections), encoding="utf-8")
+
+    # Merge per-subfolder markdown files into flat merged docs
+    for subdir in sorted(save_path.iterdir()):
+        if not subdir.is_dir():
+            continue
+        md_files = sorted([f for f in subdir.iterdir() if f.suffix.lower() == ".md"])
+        if not md_files:
+            continue
+        parts = []
+        for md_file in md_files:
+            parts.append(f"# {md_file.stem}\n\n{md_file.read_text(encoding='utf-8')}")
+        merged_content = "\n\n---\n\n".join(parts)
+        stems = "_".join(f.stem for f in md_files)
+        merged_name = f"{subdir.name}_{stems}.md"
+        (save_path / merged_name).write_text(merged_content, encoding="utf-8")
+
     return save_path / "complete_report.md"
 
 
