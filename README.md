@@ -145,6 +145,7 @@ export DEEPSEEK_API_KEY=...        # DeepSeek
 export DASHSCOPE_API_KEY=...       # Qwen (Alibaba DashScope)
 export ZHIPU_API_KEY=...           # GLM (Zhipu)
 export OPENROUTER_API_KEY=...      # OpenRouter
+export SENSENOVA_API_KEY=...       # 商汤 SenseNova (DeepSeek-V3-1 / DeepSeek-R1)
 export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
 ```
 
