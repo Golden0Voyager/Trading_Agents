@@ -269,43 +269,48 @@ class TradingAgentsGraph:
         with a per-ticker SqliteSaver so a crashed run can resume from the last
         successful node on a subsequent invocation with the same ticker+date.
         """
-        self.ticker = company_name
+        from tradingagents.ticker_resolver import resolve_ticker
+
+        resolved = resolve_ticker(company_name)
+        ticker = resolved["ticker"]
+        company_name_str = resolved.get("company_name", "")
+        self.ticker = ticker
 
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
-        self._resolve_pending_entries(company_name)
+        self._resolve_pending_entries(ticker)
 
         # Recompile with a checkpointer if the user opted in.
         if self.config.get("checkpoint_enabled"):
             self._checkpointer_ctx = get_checkpointer(
-                self.config["data_cache_dir"], company_name
+                self.config["data_cache_dir"], ticker
             )
             saver = self._checkpointer_ctx.__enter__()
             self.graph = self.workflow.compile(checkpointer=saver)
 
             step = checkpoint_step(
-                self.config["data_cache_dir"], company_name, str(trade_date)
+                self.config["data_cache_dir"], ticker, str(trade_date)
             )
             if step is not None:
                 logger.info(
-                    "Resuming from step %d for %s on %s", step, company_name, trade_date
+                    "Resuming from step %d for %s on %s", step, ticker, trade_date
                 )
             else:
-                logger.info("Starting fresh for %s on %s", company_name, trade_date)
+                logger.info("Starting fresh for %s on %s", ticker, trade_date)
 
         try:
-            return self._run_graph(company_name, trade_date)
+            return self._run_graph(ticker, trade_date, company_name_str)
         finally:
             if self._checkpointer_ctx is not None:
                 self._checkpointer_ctx.__exit__(None, None, None)
                 self._checkpointer_ctx = None
                 self.graph = self.workflow.compile()
 
-    def _run_graph(self, company_name, trade_date):
+    def _run_graph(self, company_name, trade_date, company_name_str=""):
         """Execute the graph and write the resulting state to disk and memory log."""
         # Initialize state — inject memory log context for PM.
         past_context = self.memory_log.get_past_context(company_name)
         init_agent_state = self.propagator.create_initial_state(
-            company_name, trade_date, past_context=past_context
+            company_name, trade_date, past_context=past_context, company_name_str=company_name_str
         )
         args = self.propagator.get_graph_args()
 
