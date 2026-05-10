@@ -7,6 +7,9 @@ from cli.stats_handler import StatsCallbackHandler
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
 from rich.live import Live
+from rich.console import Console
+
+console = Console()
 
 
 class BatchRunner:
@@ -199,4 +202,22 @@ class BatchRunner:
         self.output_dir.mkdir(parents=True, exist_ok=True)
         path = self.output_dir / "batch_summary.md"
         path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        # Translate if Chinese
+        if self.profile_config.get("output_language") == "Chinese":
+            from cli.main import _translate_content
+            from tradingagents.llm_clients.factory import create_llm_client
+            try:
+                provider = self.profile_config.get("llm_provider", "openai")
+                model = self.profile_config.get("quick_think_llm") or self.profile_config.get("deep_think_llm")
+                base_url = self.profile_config.get("backend_url")
+                if model:
+                    client = create_llm_client(provider, model, base_url)
+                    llm = client.get_llm()
+                    translated = _translate_content(llm, path.read_text(encoding="utf-8"))
+                    cn_path = self.output_dir / "batch_summary_CN.md"
+                    cn_path.write_text(translated, encoding="utf-8")
+            except Exception as e:
+                console.print(f"[yellow]Warning: Failed to translate batch summary: {e}[/yellow]")
+
         return path
