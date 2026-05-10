@@ -30,6 +30,9 @@ from cli.models import AnalystType
 from cli.utils import *
 from cli.announcements import fetch_announcements, display_announcements
 from cli.stats_handler import StatsCallbackHandler
+from cli.profiles import save_profile, load_profile, list_profiles
+from cli.watchlists import save_watchlist, load_watchlist, list_watchlists
+from cli.batch_runner import BatchRunner
 
 console = Console()
 
@@ -499,29 +502,32 @@ def get_user_selections():
             box_content += f"\n[dim]Default: {default}[/dim]"
         return Panel(box_content, border_style="blue", padding=(1, 2))
 
-    # Step 1: Ticker symbol
+    # Step 1: Ticker symbol(s)
     console.print(
         create_question_box(
             "Step 1: Ticker Symbol",
-            "Enter the exact ticker symbol to analyze, including exchange suffix when needed (examples: SPY, CNC.TO, 7203.T, 0700.HK)",
+            "Enter ticker symbol(s) to analyze, comma-separated for multiple (examples: SPY, AAPL,MSFT,GOOGL)",
             "SPY",
         )
     )
-    selected_ticker = get_ticker()
+    raw_tickers = get_ticker()
+    tickers = _parse_tickers_input(raw_tickers)
 
-    # Resolve ticker and display confirmation
+    # Resolve tickers
     from tradingagents.ticker_resolver import resolve_ticker
-    try:
-        resolved = resolve_ticker(selected_ticker)
-        if resolved.get("company_name"):
-            console.print(
-                f"[green]已解析: {resolved['company_name']} ({resolved['ticker']})[/green]"
-            )
-        else:
-            console.print(f"[green]已解析: {resolved['ticker']}[/green]")
-        selected_ticker = resolved["ticker"]
-    except Exception as e:
-        console.print(f"[yellow]解析提示: {e}[/yellow]")
+    selected_tickers = []
+    for t in tickers:
+        try:
+            resolved = resolve_ticker(t)
+            selected_tickers.append(resolved["ticker"])
+        except Exception as e:
+            console.print(f"[yellow]解析提示 {t}: {e}[/yellow]")
+            selected_tickers.append(t)
+
+    if len(selected_tickers) == 1:
+        selected_ticker = selected_tickers[0]
+    else:
+        selected_ticker = selected_tickers  # list for batch mode
 
     # Step 2: Analysis date
     default_date = datetime.datetime.now().strftime("%Y-%m-%d")
@@ -611,7 +617,8 @@ def get_user_selections():
         anthropic_effort = ask_anthropic_effort()
 
     return {
-        "ticker": selected_ticker,
+        "ticker": selected_ticker if isinstance(selected_ticker, str) else selected_tickers[0],
+        "tickers": selected_tickers if isinstance(selected_ticker, list) else [selected_ticker],
         "analysis_date": analysis_date,
         "analysts": selected_analysts,
         "research_depth": selected_research_depth,
@@ -645,34 +652,132 @@ def get_analysis_date():
             )
 
 
-def save_report_to_disk(final_state, ticker: str, save_path: Path, output_language: str = "English"):
+def _parse_tickers_input(raw: str) -> list[str]:
+    """Parse comma-separated ticker input into a clean list."""
+    return [t.strip() for t in raw.split(",") if t.strip()]
+
+
+def ask_mode() -> str:
+    """Ask user to choose between batch watchlist scan or custom ticker query."""
+    import questionary
+    choice = questionary.select(
+        "Select run mode:",
+        choices=[
+            questionary.Choice("批量扫描 Watchlist", "batch"),
+            questionary.Choice("查询自选股票（支持单只或多只，逗号分隔）", "single"),
+        ],
+        style=questionary.Style([
+            ("selected", "fg:green noinherit"),
+            ("highlighted", "fg:green noinherit"),
+            ("pointer", "fg:green noinherit"),
+        ]),
+    ).ask()
+    if choice is None:
+        console.print("[red]No mode selected. Exiting...[/red]")
+        exit(1)
+    return choice
+
+
+def select_watchlist_interactive() -> tuple[str, list[str]]:
+    """Let user pick a saved watchlist or import from file. Returns (name, tickers)."""
+    import questionary
+    existing = list_watchlists()
+    choices = []
+    for name in existing:
+        try:
+            tickers = load_watchlist(name)
+            display = f"{name}  ({', '.join(tickers[:5])}{'...' if len(tickers) > 5 else ''})"
+            choices.append(questionary.Choice(display, value=(name, tickers)))
+        except Exception:
+            choices.append(questionary.Choice(name, value=(name, [])))
+    choices.append(questionary.Choice("Import from file...", value=("__import__", [])))
+
+    choice = questionary.select(
+        "Select watchlist:",
+        choices=choices,
+        style=questionary.Style([
+            ("selected", "fg:yellow noinherit"),
+            ("highlighted", "fg:yellow noinherit"),
+            ("pointer", "fg:yellow noinherit"),
+        ]),
+    ).ask()
+
+    if choice is None:
+        console.print("[red]No watchlist selected. Exiting...[/red]")
+        exit(1)
+
+    name, tickers = choice
+    if name == "__import__":
+        file_path = questionary.text(
+            "Enter watchlist file path:",
+            validate=lambda x: len(x.strip()) > 0 or "Please enter a valid path.",
+        ).ask().strip()
+        from cli.watchlists import parse_watchlist_content
+        tickers = parse_watchlist_content(Path(file_path).read_text(encoding="utf-8"))
+        name = Path(file_path).stem
+    return name, tickers
+
+
+def select_profile_interactive() -> dict:
+    """Let user pick a saved profile or create a new one. Returns profile config dict."""
+    import questionary
+    existing = list_profiles()
+    if existing:
+        choices = []
+        for name in existing:
+            try:
+                prof = load_profile(name)
+                cfg = prof.get("config", {})
+                summary = f"({cfg.get('llm_provider', '?')}, {cfg.get('deep_think_llm', '?')}, {len(cfg.get('analysts', []))} analysts, {cfg.get('output_language', '?')})"
+                choices.append(questionary.Choice(f"{name}  {summary}", value=name))
+            except Exception:
+                choices.append(questionary.Choice(name, value=name))
+        choices.append(questionary.Choice("Create new profile...", value="__new__"))
+        choice = questionary.select(
+            "Select profile:",
+            choices=choices,
+            style=questionary.Style([
+                ("selected", "fg:magenta noinherit"),
+                ("highlighted", "fg:magenta noinherit"),
+                ("pointer", "fg:magenta noinherit"),
+            ]),
+        ).ask()
+        if choice is None:
+            console.print("[red]No profile selected. Exiting...[/red]")
+            exit(1)
+        if choice != "__new__":
+            return load_profile(choice)["config"]
+    # Fall through to create new profile
+    return None
+
+
+def save_report_to_disk(final_state, ticker: str, save_path: Path):
     """Save complete analysis report to disk with organized subfolders."""
     save_path.mkdir(parents=True, exist_ok=True)
     sections = []
-    is_cn = output_language.strip().lower() in ("chinese", "中文", "zh", "zh-cn")
 
     _titles = {
-        "header": "交易分析报告" if is_cn else "Trading Analysis Report",
-        "generated": "生成时间" if is_cn else "Generated",
-        "analyst_team": "一、分析师团队报告" if is_cn else "I. Analyst Team Reports",
-        "research_team": "二、研究团队决策" if is_cn else "II. Research Team Decision",
-        "trading_team": "三、交易团队计划" if is_cn else "III. Trading Team Plan",
-        "risk_team": "四、风险管理团队决策" if is_cn else "IV. Risk Management Team Decision",
-        "portfolio": "五、投资组合经理决策" if is_cn else "V. Portfolio Manager Decision",
+        "header": "Trading Analysis Report",
+        "generated": "Generated",
+        "analyst_team": "I. Analyst Team Reports",
+        "research_team": "II. Research Team Decision",
+        "trading_team": "III. Trading Team Plan",
+        "risk_team": "IV. Risk Management Team Decision",
+        "portfolio": "V. Portfolio Manager Decision",
     }
     _file_titles = {
-        "fundamentals": "基本面分析" if is_cn else "Fundamentals",
-        "market": "市场分析" if is_cn else "Market",
-        "news": "新闻分析" if is_cn else "News",
-        "sentiment": "情绪分析" if is_cn else "Sentiment",
-        "bull": "看多研究员" if is_cn else "Bull Researcher",
-        "bear": "看空研究员" if is_cn else "Bear Researcher",
-        "manager": "研究经理" if is_cn else "Research Manager",
-        "trader": "交易员" if is_cn else "Trader",
-        "aggressive": "激进分析师" if is_cn else "Aggressive Analyst",
-        "conservative": "保守分析师" if is_cn else "Conservative Analyst",
-        "neutral": "中性分析师" if is_cn else "Neutral Analyst",
-        "decision": "最终决策" if is_cn else "Decision",
+        "fundamentals": "Fundamentals",
+        "market": "Market",
+        "news": "News",
+        "sentiment": "Sentiment",
+        "bull": "Bull Researcher",
+        "bear": "Bear Researcher",
+        "manager": "Research Manager",
+        "trader": "Trader",
+        "aggressive": "Aggressive Analyst",
+        "conservative": "Conservative Analyst",
+        "neutral": "Neutral Analyst",
+        "decision": "Decision",
     }
 
     # 1. Analysts
@@ -775,6 +880,72 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path, output_langua
         (save_path / merged_name).write_text(merged_content, encoding="utf-8")
 
     return save_path / "complete_report.md"
+
+
+def _translate_content(llm, content: str) -> str:
+    """Translate report content from English to Simplified Chinese using LLM."""
+    from langchain_core.messages import HumanMessage
+
+    prompt = (
+        "请将以下金融分析报告从英文翻译成简体中文。\n"
+        "要求：\n"
+        "1. 保留所有 markdown 格式（标题层级、列表、表格、代码块、引用等）\n"
+        "2. 保留所有专业金融术语的准确性\n"
+        "3. 保留所有数字、符号、日期和货币单位不变\n"
+        "4. 不要添加任何额外解释、总结或评论\n"
+        "5. 直接返回翻译后的正文，不要包裹在代码块中\n\n"
+        f"{content}"
+    )
+    messages = [HumanMessage(content=prompt)]
+    response = llm.invoke(messages)
+    return response.content
+
+
+def run_translation_pipeline(save_path: Path, config: dict) -> None:
+    """Translate merged report files to Simplified Chinese with _CN suffix."""
+    from tradingagents.llm_clients.factory import create_llm_client
+
+    provider = config.get("llm_provider", "openai")
+    model = config.get("quick_think_llm") or config.get("deep_think_llm")
+    base_url = config.get("backend_url")
+
+    if not model:
+        console.print(
+            "[yellow]Warning: No LLM model configured for translation, skipping.[/yellow]"
+        )
+        return
+
+    try:
+        client = create_llm_client(provider, model, base_url)
+        llm = client.get_llm()
+    except Exception as e:
+        console.print(
+            f"[yellow]Warning: Failed to initialize translation LLM: {e}[/yellow]"
+        )
+        return
+
+    files_to_translate = []
+    for pattern in ["2_research_*.md", "3_trading_*.md", "4_risk_*.md"]:
+        files_to_translate.extend(sorted(save_path.glob(pattern)))
+    complete_report = save_path / "complete_report.md"
+    if complete_report.exists():
+        files_to_translate.append(complete_report)
+
+    if not files_to_translate:
+        return
+
+    console.print("[cyan]Translating reports to Chinese...[/cyan]")
+    for file_path in files_to_translate:
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            translated = _translate_content(llm, content)
+            output_path = file_path.with_suffix("").with_name(file_path.stem + "_CN.md")
+            output_path.write_text(translated, encoding="utf-8")
+            console.print(f"  [green]✓[/green] [dim]{output_path.name}[/dim]")
+        except Exception as e:
+            console.print(
+                f"[yellow]Warning: Failed to translate {file_path.name}: {e}[/yellow]"
+            )
 
 
 def display_complete_report(final_state):
@@ -1236,9 +1407,11 @@ def run_analysis(checkpoint: bool = False):
         ).strip()
         save_path = Path(save_path_str)
         try:
-            report_file = save_report_to_disk(final_state, selections["ticker"], save_path, selections.get("output_language", "English"))
+            report_file = save_report_to_disk(final_state, selections["ticker"], save_path)
             console.print(f"\n[green]✓ Report saved to:[/green] {save_path.resolve()}")
             console.print(f"  [dim]Complete report:[/dim] {report_file.name}")
+            if selections.get("output_language", "English") == "Chinese":
+                run_translation_pipeline(save_path, config)
         except Exception as e:
             console.print(f"[red]Error saving report: {e}[/red]")
 
@@ -1246,6 +1419,62 @@ def run_analysis(checkpoint: bool = False):
     display_choice = typer.prompt("\nDisplay full report on screen?", default="Y").strip().upper()
     if display_choice in ("Y", "YES", ""):
         display_complete_report(final_state)
+
+
+def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: bool = False):
+    """Run unattended batch analysis for multiple tickers."""
+    timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = Path.cwd() / "reports" / f"batch_{timestamp}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    runner = BatchRunner(
+        tickers=tickers,
+        profile_config=profile_config,
+        output_dir=output_dir,
+        checkpoint=checkpoint,
+    )
+    runner.run()
+
+    # Generate summary
+    summary_path = runner.generate_summary()
+    console.print("\n[bold cyan]Batch Complete![/bold cyan]\n")
+    console.print(f"Total: {len(tickers)}  |  Success: {len(runner.completed_tickers) - len(runner.failures)}  |  Failed: {len(runner.failures)}")
+    console.print(f"[green]Reports:[/green] {output_dir.resolve()}")
+    console.print(f"[green]Summary:[/green] {summary_path.name}")
+
+    # Print summary table
+    from rich.table import Table
+    table = Table(show_header=True, header_style="bold magenta")
+    table.add_column("Ticker", style="cyan")
+    table.add_column("Company", style="green")
+    table.add_column("Rating", style="yellow")
+    table.add_column("Entry", style="white")
+    table.add_column("Stop", style="white")
+    table.add_column("Size", style="white")
+    table.add_column("Status", style="green")
+
+    for ticker in tickers:
+        if ticker in runner.failures:
+            table.add_row(ticker, "—", "—", "—", "—", "—", f"❌ {runner.failures[ticker]}")
+        else:
+            s = runner.summaries.get(ticker, {})
+            table.add_row(
+                ticker,
+                s.get("company", ticker),
+                s.get("rating", "—"),
+                s.get("entry", "—"),
+                s.get("stop", "—"),
+                s.get("size", "—"),
+                "✅",
+            )
+    console.print(table)
+
+    # Prompt to save as watchlist if not from one
+    save_wl = typer.prompt("Save ticker list as watchlist?", default="N").strip().upper()
+    if save_wl in ("Y", "YES"):
+        wl_name = typer.prompt("Watchlist name", default=f"batch_{timestamp}").strip()
+        save_watchlist(wl_name, tickers)
+        console.print(f"[green]✓ Watchlist saved:[/green] {wl_name}")
 
 
 @app.command()
@@ -1260,12 +1489,116 @@ def analyze(
         "--clear-checkpoints",
         help="Delete all saved checkpoints before running (force fresh start).",
     ),
+    profile: Optional[str] = typer.Option(
+        None,
+        "--profile",
+        help="Use a saved profile for analysis configuration.",
+    ),
+    watchlist: Optional[str] = typer.Option(
+        None,
+        "--watchlist",
+        help="Run batch analysis using a saved watchlist (by name or file path).",
+    ),
+    tickers: Optional[str] = typer.Option(
+        None,
+        "--tickers",
+        help="Comma-separated tickers for batch analysis (e.g. AAPL,MSFT,GOOGL).",
+    ),
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
-    run_analysis(checkpoint=checkpoint)
+
+    # Direct batch mode via CLI args
+    if profile or watchlist or tickers:
+        # Load profile
+        if profile:
+            try:
+                prof = load_profile(profile)
+                profile_config = prof["config"]
+            except Exception as e:
+                console.print(f"[red]Failed to load profile '{profile}': {e}[/red]")
+                raise typer.Exit(1)
+        else:
+            profile_config = DEFAULT_CONFIG.copy()
+            profile_config["analysts"] = ["market"]
+
+        # Load tickers
+        if tickers:
+            ticker_list = _parse_tickers_input(tickers)
+        elif watchlist:
+            try:
+                ticker_list = load_watchlist(watchlist)
+            except Exception:
+                # Try as file path
+                from cli.watchlists import parse_watchlist_content
+                ticker_list = parse_watchlist_content(Path(watchlist).read_text(encoding="utf-8"))
+        else:
+            console.print("[red]Batch mode requires --tickers or --watchlist.[/red]")
+            raise typer.Exit(1)
+
+        if not ticker_list:
+            console.print("[red]No tickers to analyze.[/red]")
+            raise typer.Exit(1)
+
+        run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint)
+        return
+
+    # Interactive mode
+    mode = ask_mode()
+    if mode == "batch":
+        _, ticker_list = select_watchlist_interactive()
+        profile_config = select_profile_interactive()
+        if profile_config is None:
+            # User chose to create new profile — run the normal selection flow
+            selections = get_user_selections()
+            profile_config = {
+                "analysts": [a.value for a in selections["analysts"]],
+                "research_depth": selections["research_depth"],
+                "llm_provider": selections["llm_provider"],
+                "backend_url": selections["backend_url"],
+                "shallow_thinker": selections["shallow_thinker"],
+                "deep_thinker": selections["deep_thinker"],
+                "google_thinking_level": selections.get("google_thinking_level"),
+                "openai_reasoning_effort": selections.get("openai_reasoning_effort"),
+                "anthropic_effort": selections.get("anthropic_effort"),
+                "output_language": selections.get("output_language", "English"),
+                "analysis_date": selections["analysis_date"],
+            }
+            save_prof = typer.prompt("Save this configuration as a profile?", default="Y").strip().upper()
+            if save_prof in ("Y", "YES", ""):
+                prof_name = typer.prompt("Profile name", default="default").strip()
+                save_profile(prof_name, profile_config)
+                console.print(f"[green]✓ Profile saved:[/green] {prof_name}")
+
+        if len(ticker_list) == 1:
+            # Fall back to single-stock flow for one ticker
+            run_analysis(checkpoint=checkpoint)
+        else:
+            run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint)
+    else:
+        # Single / custom mode
+        selections = get_user_selections()
+        tickers = selections.get("tickers", [selections["ticker"]])
+        if len(tickers) > 1:
+            # Batch mode for multiple custom tickers
+            profile_config = {
+                "analysts": [a.value for a in selections["analysts"]],
+                "research_depth": selections["research_depth"],
+                "llm_provider": selections["llm_provider"],
+                "backend_url": selections["backend_url"],
+                "shallow_thinker": selections["shallow_thinker"],
+                "deep_thinker": selections["deep_thinker"],
+                "google_thinking_level": selections.get("google_thinking_level"),
+                "openai_reasoning_effort": selections.get("openai_reasoning_effort"),
+                "anthropic_effort": selections.get("anthropic_effort"),
+                "output_language": selections.get("output_language", "English"),
+                "analysis_date": selections["analysis_date"],
+            }
+            run_batch_analysis(tickers, profile_config, checkpoint=checkpoint)
+        else:
+            run_analysis(checkpoint=checkpoint)
 
 
 if __name__ == "__main__":
