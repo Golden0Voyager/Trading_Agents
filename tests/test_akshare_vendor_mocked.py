@@ -75,3 +75,35 @@ class TestAkshareIncomeStatement:
             mock_ak.stock_profit_sheet_by_report_em.return_value = pd.DataFrame()
             result = akshare_vendor.get_income_statement("600519.SS")
         assert "No income statement" in result
+
+
+@pytest.mark.unit
+class TestAkshareBalanceSheet:
+    def test_basic(self):
+        from tradingagents.dataflows import akshare_vendor
+
+        fake_df = pd.DataFrame([{
+            "REPORT_DATE": "2026-03-31",
+            "TOTAL_ASSETS": 554_600_000_000.0,
+            "TOTAL_CURRENT_ASSETS": 442_000_000_000.0,
+            "MONETARYFUNDS": 178_000_000_000.0,
+            "INVENTORY": 49_000_000_000.0,
+            "TOTAL_LIABILITIES": 102_590_000_000.0,
+            "TOTAL_EQUITY": 452_010_000_000.0,
+        }])
+        with patch("tradingagents.dataflows.akshare_vendor.ak") as mock_ak:
+            mock_ak.stock_balance_sheet_by_report_em.return_value = fake_df
+            result = akshare_vendor.get_balance_sheet("600519.SS")
+
+        assert mock_ak.stock_balance_sheet_by_report_em.call_args.kwargs["symbol"] == "SH600519"
+        assert "5546.00亿" in result
+        assert "1780.00亿" in result
+        assert "Balance Sheet" in result
+
+    def test_empty_returns_warning(self):
+        from tradingagents.dataflows import akshare_vendor
+
+        with patch("tradingagents.dataflows.akshare_vendor.ak") as mock_ak:
+            mock_ak.stock_balance_sheet_by_report_em.return_value = pd.DataFrame()
+            result = akshare_vendor.get_balance_sheet("600519.SS")
+        assert "No balance sheet" in result

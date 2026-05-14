@@ -76,8 +76,40 @@ def get_fundamentals(symbol, curr_date):
     raise NotImplementedError
 
 
-def get_balance_sheet(symbol, freq="quarterly", curr_date=None):
-    raise NotImplementedError
+_BALANCE_FIELDS = [
+    ("TOTAL_ASSETS", "总资产"),
+    ("TOTAL_CURRENT_ASSETS", "流动资产"),
+    ("MONETARYFUNDS", "货币资金"),
+    ("ACCOUNTS_RECE", "应收账款"),
+    ("INVENTORY", "存货"),
+    ("FIXED_ASSET", "固定资产"),
+    ("TOTAL_LIABILITIES", "总负债"),
+    ("TOTAL_CURRENT_LIAB", "流动负债"),
+    ("TOTAL_EQUITY", "股东权益合计"),
+]
+
+
+def get_balance_sheet(
+    symbol: Annotated[str, "A-share ticker"],
+    freq: str = "quarterly",
+    curr_date: Optional[str] = None,
+) -> str:
+    """Fetch A-share balance sheet (latest report period) via akshare."""
+    code = to_akshare_symbol(symbol, "upper_prefix")
+    with no_proxy():
+        df = ak.stock_balance_sheet_by_report_em(symbol=code)
+
+    if df is None or df.empty:
+        return f"No balance sheet available for {symbol} via akshare."
+
+    latest = df.iloc[0].to_dict()
+    period = latest.get("REPORT_DATE", "N/A")
+    header = (
+        f"# Balance Sheet for {symbol.upper()} ({period})\n"
+        f"# Source: akshare (Eastmoney 资产负债表)\n"
+        f"# Currency: CNY (元)\n\n"
+    )
+    return header + _format_row_section(latest, _BALANCE_FIELDS)
 
 
 def get_cashflow(symbol, freq="quarterly", curr_date=None):
