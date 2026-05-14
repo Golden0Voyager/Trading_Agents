@@ -172,3 +172,27 @@ class TestAkshareFundamentals:
             mock_ak.stock_yjbb_em.return_value = pd.DataFrame()
             result = akshare_vendor.get_fundamentals("600519.SS", "2026-05-14")
         assert "No fundamentals" in result
+
+
+@pytest.mark.unit
+class TestAkshareIndicators:
+    def test_uses_akshare_kline_and_stockstats(self):
+        """get_indicators should pull K-line from akshare and run stockstats."""
+        from tradingagents.dataflows import akshare_vendor
+
+        fake_df = pd.DataFrame({
+            "日期": pd.date_range("2026-04-01", periods=30, freq="D"),
+            "开盘": [1500.0 + i for i in range(30)],
+            "收盘": [1510.0 + i for i in range(30)],
+            "最高": [1520.0 + i for i in range(30)],
+            "最低": [1490.0 + i for i in range(30)],
+            "成交量": [100_000 + i * 1000 for i in range(30)],
+        })
+        with patch("tradingagents.dataflows.akshare_vendor.ak") as mock_ak:
+            mock_ak.stock_zh_a_hist.return_value = fake_df
+            result = akshare_vendor.get_indicators(
+                "600519.SS", "rsi_14", "2026-04-30", look_back_days=20
+            )
+        assert "rsi_14" in result.lower() or "RSI" in result
+        assert "600519.SS" in result
+        assert mock_ak.stock_zh_a_hist.call_args.kwargs["symbol"] == "600519"

@@ -15,6 +15,7 @@ import akshare as ak
 import pandas as pd
 
 from .akshare_common import format_money_cn, no_proxy, safe_float, to_akshare_symbol
+from .stockstats_utils import _clean_dataframe
 
 logger = logging.getLogger(__name__)
 
@@ -281,5 +282,47 @@ def get_income_statement(
     return header + _format_row_section(latest, _INCOME_FIELDS)
 
 
-def get_indicators(symbol, indicator, curr_date, look_back_days):
-    raise NotImplementedError
+def get_indicators(
+    symbol: Annotated[str, "A-share ticker"],
+    indicator: Annotated[str, "stockstats indicator name e.g. rsi_14, macd"],
+    curr_date: Annotated[str, "Current date YYYY-MM-DD"],
+    look_back_days: Annotated[int, "How many trading days to report"],
+) -> str:
+    """Compute a stockstats indicator window on akshare-sourced A-share K-line."""
+    from stockstats import wrap
+
+    bare = to_akshare_symbol(symbol, "bare")
+    end = datetime.strptime(curr_date, "%Y-%m-%d")
+    # Pull enough history to warm up long indicators (e.g. 200 SMA).
+    start = end - pd.Timedelta(days=look_back_days * 2 + 260)
+
+    with no_proxy():
+        df = ak.stock_zh_a_hist(
+            symbol=bare,
+            period="daily",
+            start_date=start.strftime("%Y%m%d"),
+            end_date=end.strftime("%Y%m%d"),
+            adjust="qfq",
+        )
+
+    if df is None or df.empty:
+        return f"No K-line data for {symbol} to compute {indicator}."
+
+    df = df.rename(columns={
+        "日期": "Date", "开盘": "Open", "收盘": "Close",
+        "最高": "High", "最低": "Low", "成交量": "Volume",
+    })
+    df = _clean_dataframe(df)
+    stats = wrap(df)
+    stats["Date"] = stats["Date"].dt.strftime("%Y-%m-%d")
+    stats[indicator]  # trigger calculation
+
+    tail = stats.tail(look_back_days)
+    lines = [
+        f"## {indicator} values for {symbol.upper()} "
+        f"(last {look_back_days} trading days, source: akshare)\n"
+    ]
+    for _, row in tail.iterrows():
+        v = row[indicator]
+        lines.append(f"{row['Date']}: {'N/A' if pd.isna(v) else v}")
+    return "\n".join(lines)
