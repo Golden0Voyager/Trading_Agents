@@ -77,18 +77,23 @@ def fetch_realtime_snapshot(
             )
             if df is not None and not df.empty:
                 d = dict(zip(df["item"], df["value"]))
-                snap["price"] = safe_float(d.get("最新"))
+                # Xueqiu uses 现价/资产净值·总市值/名称 — not 最新/总市值/股票简称.
+                snap["price"] = safe_float(d.get("现价") or d.get("最新"))
                 snap["pe_ttm"] = safe_float(d.get("市盈率(TTM)"))
                 snap["pb"] = safe_float(d.get("市净率"))
-                mc = safe_float(d.get("总市值"))
+                mc = safe_float(d.get("资产净值/总市值") or d.get("总市值"))
                 if mc is not None:
                     snap["market_cap_yi"] = round(mc / 1e8, 2)
+                name = d.get("名称")
+                if name:
+                    snap["company_name"] = str(name).strip()
                 snap["sources"].append("xueqiu")
 
         info = _with_retry(lambda: ak.stock_individual_info_em(symbol=bare))
         if info is not None and not info.empty:
             d = dict(zip(info["item"], info["value"]))
-            snap["company_name"] = str(d.get("股票简称", "")).strip()
+            if not snap["company_name"]:
+                snap["company_name"] = str(d.get("股票简称", "")).strip()
             if snap["market_cap_yi"] is None:
                 mc = safe_float(d.get("总市值"))
                 if mc is not None:
