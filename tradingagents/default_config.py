@@ -36,7 +36,9 @@ DEFAULT_CONFIG = {
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 100,
     # Data vendor configuration
-    # Category-level configuration (default for all tools in category)
+    # Category-level configuration (default for all tools in category).
+    # Note: A-share tickers (.SS/.SZ/.BJ) auto-route to akshare regardless of
+    # the value here — see tradingagents/dataflows/interface.py:route_to_vendor.
     "data_vendors": {
         "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
         "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
