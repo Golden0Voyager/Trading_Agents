@@ -8,8 +8,9 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 import akshare as ak
 
@@ -21,6 +22,25 @@ from .akshare_common import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _with_retry(fn: Callable, *, attempts: int = 3, delay_s: float = 2.0) -> Optional[Any]:
+    """Run *fn* up to *attempts* times. Returns the result or None on failure.
+
+    Eastmoney/Xueqiu intermittently close the connection (`RemoteDisconnected`)
+    or return rate-limit 400s. Each retry waits delay_s * (2 ** i) seconds,
+    so attempts=3 yields 2s + 4s = 6s of cumulative back-off before giving up.
+    """
+    last_exc = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as exc:
+            last_exc = exc
+            if i < attempts - 1:
+                time.sleep(delay_s * (2 ** i))
+    logger.debug("retry exhausted: %s", last_exc)
+    return None
 
 
 def fetch_realtime_snapshot(
@@ -52,32 +72,28 @@ def fetch_realtime_snapshot(
 
     with no_proxy():
         if token:
-            try:
-                df = ak.stock_individual_spot_xq(symbol=prefixed, token=token)
-                if df is not None and not df.empty:
-                    d = dict(zip(df["item"], df["value"]))
-                    snap["price"] = safe_float(d.get("最新"))
-                    snap["pe_ttm"] = safe_float(d.get("市盈率(TTM)"))
-                    snap["pb"] = safe_float(d.get("市净率"))
-                    mc = safe_float(d.get("总市值"))
-                    if mc is not None:
-                        snap["market_cap_yi"] = round(mc / 1e8, 2)
-                    snap["sources"].append("xueqiu")
-            except Exception as exc:
-                logger.debug("xueqiu snapshot failed for %s: %s", ticker, exc)
+            df = _with_retry(
+                lambda: ak.stock_individual_spot_xq(symbol=prefixed, token=token)
+            )
+            if df is not None and not df.empty:
+                d = dict(zip(df["item"], df["value"]))
+                snap["price"] = safe_float(d.get("最新"))
+                snap["pe_ttm"] = safe_float(d.get("市盈率(TTM)"))
+                snap["pb"] = safe_float(d.get("市净率"))
+                mc = safe_float(d.get("总市值"))
+                if mc is not None:
+                    snap["market_cap_yi"] = round(mc / 1e8, 2)
+                snap["sources"].append("xueqiu")
 
-        try:
-            info = ak.stock_individual_info_em(symbol=bare)
-            if info is not None and not info.empty:
-                d = dict(zip(info["item"], info["value"]))
-                snap["company_name"] = str(d.get("股票简称", "")).strip()
-                if snap["market_cap_yi"] is None:
-                    mc = safe_float(d.get("总市值"))
-                    if mc is not None:
-                        snap["market_cap_yi"] = round(mc / 1e8, 2)
-                snap["sources"].append("eastmoney_info")
-        except Exception as exc:
-            logger.debug("eastmoney info failed for %s: %s", ticker, exc)
+        info = _with_retry(lambda: ak.stock_individual_info_em(symbol=bare))
+        if info is not None and not info.empty:
+            d = dict(zip(info["item"], info["value"]))
+            snap["company_name"] = str(d.get("股票简称", "")).strip()
+            if snap["market_cap_yi"] is None:
+                mc = safe_float(d.get("总市值"))
+                if mc is not None:
+                    snap["market_cap_yi"] = round(mc / 1e8, 2)
+            snap["sources"].append("eastmoney_info")
 
     if not snap["sources"]:
         return None
