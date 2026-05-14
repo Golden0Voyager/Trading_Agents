@@ -14,7 +14,7 @@ from typing import Annotated, Optional
 import akshare as ak
 import pandas as pd
 
-from .akshare_common import no_proxy, to_akshare_symbol
+from .akshare_common import format_money_cn, no_proxy, safe_float, to_akshare_symbol
 
 logger = logging.getLogger(__name__)
 
@@ -84,8 +84,59 @@ def get_cashflow(symbol, freq="quarterly", curr_date=None):
     raise NotImplementedError
 
 
-def get_income_statement(symbol, freq="quarterly", curr_date=None):
-    raise NotImplementedError
+_INCOME_FIELDS = [
+    ("TOTAL_OPERATE_INCOME", "营业总收入"),
+    ("OPERATE_INCOME", "营业收入"),
+    ("OPERATE_COST", "营业成本"),
+    ("OPERATE_PROFIT", "营业利润"),
+    ("TOTAL_PROFIT", "利润总额"),
+    ("PARENT_NETPROFIT", "归母净利润"),
+    ("DEDUCT_PARENT_NETPROFIT", "扣非归母净利润"),
+    ("BASIC_EPS", "基本每股收益"),
+    ("DILUTED_EPS", "稀释每股收益"),
+]
+
+
+def _format_row_section(row: dict, fields) -> str:
+    """Format a sequence of (akshare_key, label) pairs from *row* into lines.
+
+    Monetary scale is auto-detected: |v| >= 1000 uses format_money_cn (亿/万);
+    smaller values (EPS, ratios) keep raw float with 4 decimal places.
+    """
+    lines = []
+    for key, label in fields:
+        v = safe_float(row.get(key))
+        if v is None:
+            continue
+        if abs(v) >= 1000:
+            lines.append(f"- {label}: {format_money_cn(v)}")
+        else:
+            lines.append(f"- {label}: {v:.4f}")
+    return "\n".join(lines) if lines else "- (no fields available)"
+
+
+def get_income_statement(
+    symbol: Annotated[str, "A-share ticker"],
+    freq: Annotated[str, "annual/quarterly (currently informational)"] = "quarterly",
+    curr_date: Optional[str] = None,
+) -> str:
+    """Fetch A-share income statement (latest report period) via akshare."""
+    code = to_akshare_symbol(symbol, "upper_prefix")
+    with no_proxy():
+        df = ak.stock_profit_sheet_by_report_em(symbol=code)
+
+    if df is None or df.empty:
+        return f"No income statement available for {symbol} via akshare."
+
+    latest = df.iloc[0].to_dict()
+    period = latest.get("REPORT_DATE", "N/A")
+
+    header = (
+        f"# Income Statement for {symbol.upper()} ({period})\n"
+        f"# Source: akshare (Eastmoney 利润表)\n"
+        f"# Currency: CNY (元)\n\n"
+    )
+    return header + _format_row_section(latest, _INCOME_FIELDS)
 
 
 def get_indicators(symbol, indicator, curr_date, look_back_days):

@@ -40,3 +40,38 @@ class TestAkshareStockData:
                 "600519.SS", "2026-05-10", "2026-05-14"
             )
         assert "No data" in result
+
+
+@pytest.mark.unit
+class TestAkshareIncomeStatement:
+    def test_returns_latest_period_summary(self):
+        from tradingagents.dataflows import akshare_vendor
+
+        fake_df = pd.DataFrame([{
+            "REPORT_DATE": "2026-03-31",
+            "TOTAL_OPERATE_INCOME": 41_580_000_000.0,
+            "OPERATE_INCOME": 41_580_000_000.0,
+            "OPERATE_COST": 4_158_000_000.0,
+            "OPERATE_PROFIT": 26_530_000_000.0,
+            "PARENT_NETPROFIT": 19_840_000_000.0,
+            "BASIC_EPS": 15.78,
+        }])
+        with patch("tradingagents.dataflows.akshare_vendor.ak") as mock_ak:
+            mock_ak.stock_profit_sheet_by_report_em.return_value = fake_df
+            result = akshare_vendor.get_income_statement("600519.SS")
+
+        call_args = mock_ak.stock_profit_sheet_by_report_em.call_args
+        assert call_args.kwargs["symbol"] == "SH600519"
+        assert "Income Statement for 600519.SS" in result
+        assert "415.80亿" in result
+        assert "198.40亿" in result
+        assert "15.7800" in result or "15.78" in result
+        assert "akshare" in result.lower()
+
+    def test_empty_returns_warning(self):
+        from tradingagents.dataflows import akshare_vendor
+
+        with patch("tradingagents.dataflows.akshare_vendor.ak") as mock_ak:
+            mock_ak.stock_profit_sheet_by_report_em.return_value = pd.DataFrame()
+            result = akshare_vendor.get_income_statement("600519.SS")
+        assert "No income statement" in result
