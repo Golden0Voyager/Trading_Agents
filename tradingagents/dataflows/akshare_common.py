@@ -6,9 +6,10 @@ depend on this module exclusively for cross-cutting concerns.
 """
 from __future__ import annotations
 
+import math
 import os
 from contextlib import contextmanager
-from typing import Generator, Optional
+from typing import Any, Generator, Optional
 
 
 class AShareSymbolError(ValueError):
@@ -68,3 +69,50 @@ def no_proxy() -> Generator[None, None, None]:
     finally:
         for k, v in saved.items():
             os.environ[k] = v
+
+
+_UNIT_FACTORS = {
+    "yuan": 1.0,
+    "wan": 10_000.0,
+    "yi": 100_000_000.0,
+}
+
+
+def safe_float(value: Any) -> Optional[float]:
+    """Best-effort float coercion; returns None on failure or NaN/Inf."""
+    if value is None:
+        return None
+    try:
+        f = float(value)
+    except (TypeError, ValueError):
+        return None
+    if math.isnan(f) or math.isinf(f):
+        return None
+    return f
+
+
+def to_yuan(value: Any, source_unit: str) -> Optional[float]:
+    """Normalize a monetary value to yuan (元).
+
+    source_unit ∈ {"yuan", "wan", "yi"}. This is the single point where the
+    万元/亿元 conversion happens — keeping it centralized prevents the kind
+    of systematic 10× errors recorded in financial_data_errors_report.md.
+    """
+    if source_unit not in _UNIT_FACTORS:
+        raise ValueError(f"Unknown source_unit: {source_unit!r}")
+    v = safe_float(value)
+    if v is None:
+        return None
+    return v * _UNIT_FACTORS[source_unit]
+
+
+def format_money_cn(value_yuan: Optional[float]) -> str:
+    """Format yuan as a Chinese-friendly string with auto-scaled unit."""
+    if value_yuan is None:
+        return "N/A"
+    abs_v = abs(value_yuan)
+    if abs_v >= 100_000_000:
+        return f"{value_yuan / 100_000_000:.2f}亿"
+    if abs_v >= 10_000:
+        return f"{value_yuan / 10_000:.2f}万"
+    return f"{value_yuan:.2f}"
