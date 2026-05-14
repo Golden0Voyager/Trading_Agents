@@ -112,8 +112,36 @@ def get_balance_sheet(
     return header + _format_row_section(latest, _BALANCE_FIELDS)
 
 
-def get_cashflow(symbol, freq="quarterly", curr_date=None):
-    raise NotImplementedError
+def get_cashflow(
+    symbol: Annotated[str, "A-share ticker"],
+    freq: str = "quarterly",
+    curr_date: Optional[str] = None,
+) -> str:
+    """Fetch A-share cash flow statement (latest report period) via akshare."""
+    code = to_akshare_symbol(symbol, "upper_prefix")
+    with no_proxy():
+        df = ak.stock_cash_flow_sheet_by_report_em(symbol=code)
+
+    if df is None or df.empty:
+        return f"No cash flow statement available for {symbol} via akshare."
+
+    latest = df.iloc[0].to_dict()
+    period = latest.get("REPORT_DATE", "N/A")
+    header = (
+        f"# Cash Flow Statement for {symbol.upper()} ({period})\n"
+        f"# Source: akshare (Eastmoney 现金流量表)\n"
+        f"# Currency: CNY (元)\n\n"
+    )
+    return header + _format_row_section(latest, _CASHFLOW_FIELDS)
+
+
+_CASHFLOW_FIELDS = [
+    ("NETCASH_OPERATE", "经营活动现金流净额"),
+    ("NETCASH_INVEST", "投资活动现金流净额"),
+    ("NETCASH_FINANCE", "筹资活动现金流净额"),
+    ("CCE_ADD", "现金及等价物净增加额"),
+    ("END_CCE", "期末现金及等价物余额"),
+]
 
 
 _INCOME_FIELDS = [

@@ -107,3 +107,31 @@ class TestAkshareBalanceSheet:
             mock_ak.stock_balance_sheet_by_report_em.return_value = pd.DataFrame()
             result = akshare_vendor.get_balance_sheet("600519.SS")
         assert "No balance sheet" in result
+
+
+@pytest.mark.unit
+class TestAkshareCashflow:
+    def test_basic(self):
+        from tradingagents.dataflows import akshare_vendor
+
+        fake_df = pd.DataFrame([{
+            "REPORT_DATE": "2026-03-31",
+            "NETCASH_OPERATE": 23_000_000_000.0,
+            "NETCASH_INVEST": -5_000_000_000.0,
+            "NETCASH_FINANCE": -8_000_000_000.0,
+            "CCE_ADD": 10_000_000_000.0,
+        }])
+        with patch("tradingagents.dataflows.akshare_vendor.ak") as mock_ak:
+            mock_ak.stock_cash_flow_sheet_by_report_em.return_value = fake_df
+            result = akshare_vendor.get_cashflow("600519.SS")
+        assert "230.00亿" in result
+        assert "-50.00亿" in result
+        assert "Cash Flow" in result
+
+    def test_empty_returns_warning(self):
+        from tradingagents.dataflows import akshare_vendor
+
+        with patch("tradingagents.dataflows.akshare_vendor.ak") as mock_ak:
+            mock_ak.stock_cash_flow_sheet_by_report_em.return_value = pd.DataFrame()
+            result = akshare_vendor.get_cashflow("600519.SS")
+        assert "No cash flow" in result
