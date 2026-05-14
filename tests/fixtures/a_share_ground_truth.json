@@ -1,0 +1,56 @@
+{
+  "_doc": "Ground-truth values extracted from docs/financial_data_errors_report.md. Tolerances are intentionally loose because A-share financial data drifts between reporting periods; the regression test asserts magnitude order, not exact equality.",
+  "stocks": {
+    "300175.SZ": {
+      "name": "朗源股份",
+      "total_assets_yi": {"value": 5.54, "tolerance_pct": 30},
+      "q1_revenue_yi": {"value": 0.89, "tolerance_pct": 40},
+      "inventory_yi": {"value": 1.59, "tolerance_pct": 40}
+    },
+    "300454.SZ": {
+      "name": "深信服",
+      "total_assets_yi": {"value": 151, "tolerance_pct": 25},
+      "pe_ttm": {"value": 88.98, "tolerance_pct": 25}
+    },
+    "300562.SZ": {
+      "name": "乐心医疗",
+      "total_assets_yi": {"value": 14.08, "tolerance_pct": 30}
+    },
+    "300760.SZ": {
+      "name": "迈瑞医疗",
+      "q1_revenue_yi": {"value": 83.52, "tolerance_pct": 20},
+      "q1_net_profit_yi": {"value": 23.30, "tolerance_pct": 20},
+      "total_assets_yi": {"value": 596.15, "tolerance_pct": 20}
+    },
+    "603893.SS": {
+      "name": "瑞芯微",
+      "total_assets_yi": {"value": 57.46, "tolerance_pct": 25},
+      "pe_ttm": {"value": 63.29, "tolerance_pct": 25},
+      "eps_expected": {"value": 3.275, "tolerance_pct": 25}
+    },
+    "603223.SS": {
+      "name": "恒通股份",
+      "q1_net_margin_pct": {"value": 28.18, "tolerance_pct": 35}
+    },
+    "002594.SZ": {
+      "name": "比亚迪",
+      "pe_ttm": {"value": 34.88, "tolerance_pct": 25}
+    },
+    "300002.SZ": {
+      "name": "神州泰岳",
+      "gross_margin_pct": {"value": 49.89, "tolerance_pct": 15},
+      "cash_yi": {"value": 21.78, "tolerance_pct": 30},
+      "free_cash_flow_yi": {"value": 1.06, "tolerance_pct": 50}
+    },
+    "000100.SZ": {
+      "name": "TCL科技",
+      "revenue_yi": {"value": 434.78, "tolerance_pct": 20}
+    },
+    "600900.SS": {
+      "name": "长江电力"
+    },
+    "002241.SZ": {
+      "name": "歌尔股份"
+    }
+  }
+}
