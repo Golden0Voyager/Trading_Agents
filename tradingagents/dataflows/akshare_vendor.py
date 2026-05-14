@@ -72,8 +72,90 @@ def get_stock_data(
     return header + df.to_csv()
 
 
-def get_fundamentals(symbol, curr_date):
-    raise NotImplementedError
+def _safe_call(func, *args, **kwargs):
+    """Invoke an akshare function, returning None on any exception."""
+    try:
+        return func(*args, **kwargs)
+    except Exception as exc:
+        logger.debug("akshare call %s failed: %s", getattr(func, "__name__", "?"), exc)
+        return None
+
+
+def _yjbb_report_date_for(curr_date: Optional[str]) -> str:
+    """Pick the most recently available yjbb report date as YYYYMMDD.
+
+    Q1 results land in late April, Q2 in late August, Q3 in late October,
+    so we lag by ~one month relative to the period-end.
+    """
+    if curr_date:
+        y, m, _ = curr_date.split("-")
+        y, m = int(y), int(m)
+    else:
+        now = datetime.now()
+        y, m = now.year, now.month
+    if m >= 11:
+        return f"{y}0930"
+    if m >= 8:
+        return f"{y}0630"
+    if m >= 5:
+        return f"{y}0331"
+    return f"{y - 1}0930"
+
+
+def get_fundamentals(
+    symbol: Annotated[str, "A-share ticker"],
+    curr_date: Annotated[str, "Current date YYYY-MM-DD"],
+) -> str:
+    """Combine company-info + latest performance report into a fundamentals brief."""
+    bare = to_akshare_symbol(symbol, "bare")
+
+    with no_proxy():
+        info_df = _safe_call(ak.stock_individual_info_em, symbol=bare)
+        report_date = _yjbb_report_date_for(curr_date)
+        yjbb_df = _safe_call(ak.stock_yjbb_em, date=report_date)
+
+    lines = [
+        f"# Fundamentals for {symbol.upper()} as of {curr_date}",
+        f"# Source: akshare (Eastmoney)",
+        "",
+    ]
+
+    if info_df is not None and not info_df.empty:
+        info = dict(zip(info_df["item"], info_df["value"]))
+        for label in ("股票简称", "行业", "上市时间", "总股本", "流通股", "总市值", "流通市值"):
+            if label in info and info[label] not in (None, ""):
+                v = info[label]
+                if label in ("总市值", "流通市值"):
+                    v = format_money_cn(safe_float(v))
+                elif label in ("总股本", "流通股"):
+                    nv = safe_float(v)
+                    v = f"{nv:,.0f}" if nv is not None else v
+                lines.append(f"- {label}: {v}")
+        lines.append("")
+
+    if yjbb_df is not None and not yjbb_df.empty:
+        row = yjbb_df[yjbb_df["股票代码"] == bare]
+        if not row.empty:
+            r = row.iloc[0]
+            period = f"{report_date[:4]}-{report_date[4:6]}-{report_date[6:]}"
+            lines.append(f"## 业绩报表 (报告期 {period})")
+            for col, label in [
+                ("营业总收入-同比增长", "营收同比增长(YoY)"),
+                ("净利润-同比增长", "净利润同比增长(YoY)"),
+                ("销售毛利率", "毛利率"),
+                ("净资产收益率", "ROE"),
+                ("每股收益", "EPS"),
+                ("每股经营现金流量", "每股经营现金流"),
+            ]:
+                v = safe_float(r.get(col))
+                if v is None:
+                    continue
+                unit = "%" if any(k in label for k in ("增长", "毛利率", "ROE")) else ""
+                lines.append(f"- {label}: {v:.2f}{unit}")
+
+    if len(lines) <= 3:
+        return f"No fundamentals available for {symbol} via akshare."
+    return "\n".join(lines)
 
 
 _BALANCE_FIELDS = [

@@ -135,3 +135,40 @@ class TestAkshareCashflow:
             mock_ak.stock_cash_flow_sheet_by_report_em.return_value = pd.DataFrame()
             result = akshare_vendor.get_cashflow("600519.SS")
         assert "No cash flow" in result
+
+
+@pytest.mark.unit
+class TestAkshareFundamentals:
+    def test_combines_info_and_yjbb(self):
+        from tradingagents.dataflows import akshare_vendor
+
+        info_df = pd.DataFrame({
+            "item": ["股票简称", "行业", "总市值", "流通市值"],
+            "value": ["贵州茅台", "白酒", 2_108_000_000_000.0, 2_108_000_000_000.0],
+        })
+        yjbb_df = pd.DataFrame([{
+            "股票代码": "600519",
+            "营业总收入-同比增长": 12.5,
+            "净利润-同比增长": 15.2,
+            "销售毛利率": 91.5,
+            "净资产收益率": 18.0,
+            "每股收益": 15.78,
+        }])
+        with patch("tradingagents.dataflows.akshare_vendor.ak") as mock_ak:
+            mock_ak.stock_individual_info_em.return_value = info_df
+            mock_ak.stock_yjbb_em.return_value = yjbb_df
+            result = akshare_vendor.get_fundamentals("600519.SS", "2026-05-14")
+
+        assert "贵州茅台" in result
+        assert "白酒" in result
+        assert "91.50%" in result
+        assert "ROE" in result or "净资产收益率" in result
+
+    def test_empty_returns_warning(self):
+        from tradingagents.dataflows import akshare_vendor
+
+        with patch("tradingagents.dataflows.akshare_vendor.ak") as mock_ak:
+            mock_ak.stock_individual_info_em.return_value = pd.DataFrame()
+            mock_ak.stock_yjbb_em.return_value = pd.DataFrame()
+            result = akshare_vendor.get_fundamentals("600519.SS", "2026-05-14")
+        assert "No fundamentals" in result
