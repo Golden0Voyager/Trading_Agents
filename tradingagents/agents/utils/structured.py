@@ -31,12 +31,22 @@ T = TypeVar("T", bound=BaseModel)
 def bind_structured(llm: Any, schema: type[T], agent_name: str) -> Optional[Any]:
     """Return ``llm.with_structured_output(schema)`` or ``None`` if unsupported.
 
-    Logs a warning when the binding fails so the user understands the agent
-    will use free-text generation for every call instead of one-shot fallback.
+    A few reasoning-only providers (notably DeepSeek's deepseek-reasoner / R1)
+    advertise NotImplementedError because they have no tool_choice — this is
+    an *expected* fallback path, not an error, so it's logged at debug. Any
+    other failure mode (AttributeError from an unwrapped client) stays at
+    warning so it surfaces to the operator.
     """
     try:
         return llm.with_structured_output(schema)
-    except (NotImplementedError, AttributeError) as exc:
+    except NotImplementedError as exc:
+        logger.debug(
+            "%s: structured output unavailable on this model (%s); "
+            "using free-text generation",
+            agent_name, exc,
+        )
+        return None
+    except AttributeError as exc:
         logger.warning(
             "%s: provider does not support with_structured_output (%s); "
             "falling back to free-text generation",
