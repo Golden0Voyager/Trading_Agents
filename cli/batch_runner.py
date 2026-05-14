@@ -1,4 +1,5 @@
 import time
+from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
@@ -30,6 +31,23 @@ class BatchRunner:
         self.failures: dict[str, str] = {}
         self.summaries: dict[str, dict] = {}
         self.dashboard = BatchDashboard(total=len(tickers), profile_name=profile_config.get("name", "default"))
+        # Set by run() once the Live context owns these — _refresh_display() reads
+        # them. When unset (e.g. tests calling _run_single directly), refresh is a no-op.
+        self._layout = None
+        self._start_time: Optional[float] = None
+
+    def _refresh_display(self) -> None:
+        """Push current dashboard state into the Live-managed layout.
+
+        Without this call the dashboard mutations inside _run_single's stream
+        loop never reach the screen — Live only re-renders the layout object
+        it was given, and our updates target dashboard fields, not panels.
+        Safe no-op when no Live context is active.
+        """
+        if self._layout is None or self._start_time is None:
+            return
+        elapsed = time.time() - self._start_time
+        update_batch_display(self._layout, self.dashboard, elapsed=elapsed)
 
     def _is_already_completed(self, ticker: str) -> bool:
         return (self.output_dir / ticker / "complete_report.md").exists()
@@ -39,7 +57,7 @@ class BatchRunner:
         config["max_debate_rounds"] = self.profile_config.get("research_depth", 1)
         config["max_risk_discuss_rounds"] = self.profile_config.get("research_depth", 1)
         config["quick_think_llm"] = self.profile_config.get("shallow_thinker")
-        config["deep_think_llm"] = self.profile_config.get("deep_think_llm")
+        config["deep_think_llm"] = self.profile_config.get("deep_thinker")
         config["backend_url"] = self.profile_config.get("backend_url")
         config["llm_provider"] = self.profile_config.get("llm_provider", "openai").lower()
         config["google_thinking_level"] = self.profile_config.get("google_thinking_level")
@@ -59,11 +77,18 @@ class BatchRunner:
             update_research_team_status,
             classify_message_type,
         )
+        from tradingagents.ticker_resolver import resolve_ticker
+
+        # Resolve ticker (A-share numeric codes get .SS/.SZ/.BJ suffix)
+        resolved = resolve_ticker(ticker)
+        resolved_ticker = resolved["ticker"]
+        company_name = resolved.get("company_name", "")
 
         config = self._build_config()
         selected_analyst_keys = [a for a in ANALYST_ORDER if a in self.profile_config.get("analysts", [])]
         if not selected_analyst_keys:
             selected_analyst_keys = ["market"]
+        self.dashboard.selected_analysts = selected_analyst_keys
 
         stats_handler = StatsCallbackHandler()
         graph = TradingAgentsGraph(
@@ -73,7 +98,10 @@ class BatchRunner:
             callbacks=[stats_handler],
         )
 
-        init_state = graph.propagator.create_initial_state(ticker, self.profile_config.get("analysis_date"))
+        trade_date = self.profile_config.get("analysis_date") or datetime.now().strftime("%Y-%m-%d")
+        init_state = graph.propagator.create_initial_state(resolved_ticker, trade_date)
+        if company_name:
+            init_state["company_name"] = company_name
         args = graph.propagator.get_graph_args(callbacks=[stats_handler])
 
         trace = []
@@ -113,6 +141,7 @@ class BatchRunner:
                 if judge:
                     self.dashboard.set_agent_status("Portfolio Manager", "completed")
 
+            self._refresh_display()
             trace.append(chunk)
 
         final_state = trace[-1] if trace else {}
@@ -154,7 +183,14 @@ class BatchRunner:
         start_time = time.time()
         self.dashboard.update_progress(self.tickers[0] if self.tickers else None, 0, 0)
 
+        self._layout = layout
+        self._start_time = start_time
+
         with Live(layout, refresh_per_second=4) as live:
+            # Push an initial frame so the user sees something other than empty
+            # panels for the few seconds before the first node fires.
+            update_batch_display(layout, self.dashboard, elapsed=0.0)
+
             for idx, ticker in enumerate(self.tickers):
                 if self._is_already_completed(ticker):
                     self.completed_tickers.add(ticker)
@@ -179,6 +215,11 @@ class BatchRunner:
 
                 self.dashboard.update_progress(ticker, len(self.completed_tickers) - len(self.failures), len(self.failures))
                 update_batch_display(layout, self.dashboard, elapsed=time.time() - start_time)
+
+        # Live closed — release the layout reference so any stray _refresh_display
+        # call from finalization code becomes a no-op instead of writing to a dead layout.
+        self._layout = None
+        self._start_time = None
 
     def generate_summary(self) -> Path:
         """Generate batch_summary.md. Returns path."""

@@ -65,3 +65,77 @@ def test_generate_summary_creates_markdown(tmp_path):
     assert "Buy" in content
     assert "TSLA" in content
     assert "Invalid ticker" in content
+
+
+def test_refresh_display_noop_without_layout(tmp_path):
+    """_refresh_display() is safe to call before run() initializes the layout."""
+    runner = BatchRunner(
+        tickers=["AAPL"],
+        profile_config={"llm_provider": "openai", "output_language": "English"},
+        output_dir=tmp_path / "reports",
+    )
+    # Should not raise even though _layout / _start_time are None.
+    runner._refresh_display()
+    assert runner._layout is None
+
+
+def test_refresh_display_invokes_update_when_layout_set(tmp_path):
+    """When run() has set _layout and _start_time, _refresh_display pushes state."""
+    runner = BatchRunner(
+        tickers=["AAPL"],
+        profile_config={"llm_provider": "openai", "output_language": "English"},
+        output_dir=tmp_path / "reports",
+    )
+    runner._layout = MagicMock()
+    runner._start_time = 0.0
+
+    with patch("cli.batch_runner.update_batch_display") as mock_update:
+        runner._refresh_display()
+        mock_update.assert_called_once()
+        # First positional arg is layout, second is dashboard
+        args, kwargs = mock_update.call_args
+        assert args[0] is runner._layout
+        assert args[1] is runner.dashboard
+        assert "elapsed" in kwargs
+
+
+def test_run_single_refreshes_per_chunk(tmp_path):
+    """_run_single must call _refresh_display() once per stream chunk so the
+    Live-managed layout reflects in-flight progress instead of freezing on the
+    initial frame for the entire 5-30 min single-stock analysis."""
+    runner = BatchRunner(
+        tickers=["AAPL"],
+        profile_config={
+            "llm_provider": "openai",
+            "output_language": "English",
+            "analysts": ["market"],
+            "analysis_date": "2026-05-15",
+        },
+        output_dir=tmp_path / "reports",
+    )
+    # Pretend run() has already opened the Live context.
+    runner._layout = MagicMock()
+    runner._start_time = 0.0
+
+    # Fake graph: 3 chunks then final state has the keys save_report_to_disk needs.
+    fake_chunks = [
+        {"messages": []},
+        {"investment_debate_state": {"bull_history": "x"}},
+        {"final_trade_decision": "Rating: Hold\nEntry: 100\nStop: 90\nSize: 1%"},
+    ]
+    fake_graph = MagicMock()
+    fake_graph.graph.stream.return_value = iter(fake_chunks)
+    fake_graph.propagator.create_initial_state.return_value = {"messages": []}
+    fake_graph.propagator.get_graph_args.return_value = {}
+
+    with patch("cli.batch_runner.TradingAgentsGraph", return_value=fake_graph), \
+         patch("cli.batch_runner.StatsCallbackHandler"), \
+         patch("tradingagents.ticker_resolver.resolve_ticker",
+               return_value={"ticker": "AAPL", "company_name": "Apple Inc."}), \
+         patch("cli.main.save_report_to_disk"), \
+         patch("cli.main.run_translation_pipeline"), \
+         patch.object(runner, "_refresh_display") as mock_refresh:
+        runner._run_single("AAPL")
+
+    # One refresh per chunk yielded.
+    assert mock_refresh.call_count == len(fake_chunks)
