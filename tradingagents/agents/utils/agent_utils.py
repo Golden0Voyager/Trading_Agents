@@ -11,12 +11,26 @@ from tradingagents.agents.utils.fundamental_data_tools import (
     get_fundamentals,
     get_balance_sheet,
     get_cashflow,
-    get_income_statement
+    get_income_statement,
+    get_earnings_estimates,
 )
 from tradingagents.agents.utils.news_data_tools import (
     get_news,
     get_insider_transactions,
-    get_global_news
+    get_global_news,
+    get_company_announcements,
+    get_restricted_release,
+    get_institutional_holdings,
+    get_northbound_hold,
+)
+from tradingagents.agents.utils.fund_flow_tools import (
+    get_fund_flow,
+)
+from tradingagents.agents.utils.macro_data_tools import (
+    get_macro_indicators,
+)
+from tradingagents.agents.utils.industry_data_tools import (
+    get_industry_valuation,
 )
 
 
