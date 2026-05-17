@@ -1,6 +1,9 @@
+import logging
 from langchain_core.tools import tool
 from typing import Annotated
 from tradingagents.dataflows.interface import route_to_vendor
+
+logger = logging.getLogger(__name__)
 
 @tool
 def get_indicators(
@@ -27,6 +30,10 @@ def get_indicators(
     for ind in indicators:
         try:
             results.append(route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days))
-        except ValueError as e:
+        except RuntimeError as e:
+            # All vendors failed — log one concise warning instead of per-vendor spam.
+            logger.warning("无法获取 %s 的指标 %s：所有数据源均不可用 (%s)", symbol, ind, e)
+            results.append(str(e))
+        except Exception as e:
             results.append(str(e))
     return "\n\n".join(results)
