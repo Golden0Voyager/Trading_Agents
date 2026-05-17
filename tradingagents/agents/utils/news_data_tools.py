@@ -51,3 +51,76 @@ def get_insider_transactions(
         str: A report of insider transaction data
     """
     return route_to_vendor("get_insider_transactions", ticker)
+
+
+@tool
+def get_company_announcements(
+    ticker: Annotated[str, "Ticker symbol"],
+    start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
+    end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+) -> str:
+    """
+    Retrieve company announcements (notices, reports, regulatory filings) for a given ticker.
+    Covers significant matters, financial reports, financing announcements, risk warnings,
+    asset restructuring, information changes, and shareholding changes.
+    Uses the configured news_data vendor (akshare for A-shares).
+    Args:
+        ticker (str): Ticker symbol
+        start_date (str): Start date in yyyy-mm-dd format
+        end_date (str): End date in yyyy-mm-dd format
+    Returns:
+        str: A formatted string containing company announcements
+    """
+    return route_to_vendor("get_company_announcements", ticker, start_date, end_date)
+
+
+@tool
+def get_restricted_release(
+    ticker: Annotated[str, "Ticker symbol"],
+    start_date: Annotated[str, "Start date in yyyy-mm-dd format"],
+    end_date: Annotated[str, "End date in yyyy-mm-dd format"],
+) -> str:
+    """
+    Retrieve restricted share release (unlock) events for a given ticker.
+    Shows upcoming share supply pressure from locked shares becoming tradable.
+    Uses the configured news_data vendor (akshare for A-shares).
+    Args:
+        ticker (str): Ticker symbol
+        start_date (str): Start date in yyyy-mm-dd format
+        end_date (str): End date in yyyy-mm-dd format
+    Returns:
+        str: A formatted report of restricted share release events
+    """
+    return route_to_vendor("get_restricted_release", ticker, start_date, end_date)
+
+
+@tool
+def get_institutional_holdings(
+    ticker: Annotated[str, "Ticker symbol"],
+) -> str:
+    """
+    Retrieve institutional holdings and top shareholder data for a given ticker.
+    Shows fund holdings, shareholder structure, and smart money positioning.
+    Uses the configured news_data vendor (akshare for A-shares).
+    Args:
+        ticker (str): Ticker symbol
+    Returns:
+        str: A formatted report of institutional holdings
+    """
+    return route_to_vendor("get_institutional_holdings", ticker)
+
+
+@tool
+def get_northbound_hold(
+    ticker: Annotated[str, "Ticker symbol"],
+) -> str:
+    """
+    Retrieve northbound (Stock Connect) foreign investor holding data.
+    Shows foreign institutional investor positioning in A-shares via HKEX Stock Connect.
+    Uses the configured news_data vendor (akshare for A-shares).
+    Args:
+        ticker (str): Ticker symbol
+    Returns:
+        str: A formatted report of northbound holdings
+    """
+    return route_to_vendor("get_northbound_hold", ticker)
