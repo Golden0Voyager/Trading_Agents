@@ -196,3 +196,14 @@ class TestAkshareIndicators:
         assert "rsi_14" in result.lower() or "RSI" in result
         assert "600519.SS" in result
         assert mock_ak.stock_zh_a_hist.call_args.kwargs["symbol"] == "600519"
+
+    def test_propagates_network_exceptions(self):
+        """Network errors should bubble up so route_to_vendor can fall back to yfinance."""
+        from tradingagents.dataflows import akshare_vendor
+
+        with patch("tradingagents.dataflows.akshare_vendor.ak") as mock_ak:
+            mock_ak.stock_zh_a_hist.side_effect = ConnectionError("network down")
+            with pytest.raises(ConnectionError, match="network down"):
+                akshare_vendor.get_indicators(
+                    "600519.SS", "rsi_14", "2026-04-30", look_back_days=20
+                )
