@@ -37,6 +37,8 @@ class GraphSetup:
                 - "social": Social media analyst
                 - "news": News analyst
                 - "fundamentals": Fundamentals analyst
+                - "governance": Governance analyst
+                - "industry": Industry analyst
         """
         if len(selected_analysts) == 0:
             raise ValueError("Trading Agents Graph Setup Error: no analysts selected!")
@@ -73,6 +75,20 @@ class GraphSetup:
             )
             delete_nodes["fundamentals"] = create_msg_delete()
             tool_nodes["fundamentals"] = self.tool_nodes["fundamentals"]
+
+        if "governance" in selected_analysts:
+            analyst_nodes["governance"] = create_governance_analyst(
+                self.quick_thinking_llm
+            )
+            delete_nodes["governance"] = create_msg_delete()
+            tool_nodes["governance"] = self.tool_nodes["governance"]
+
+        if "industry" in selected_analysts:
+            analyst_nodes["industry"] = create_industry_analyst(
+                self.quick_thinking_llm
+            )
+            delete_nodes["industry"] = create_msg_delete()
+            tool_nodes["industry"] = self.tool_nodes["industry"]
 
         # Create researcher and manager nodes
         bull_researcher_node = create_bull_researcher(self.quick_thinking_llm)
