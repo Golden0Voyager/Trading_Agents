@@ -1,3 +1,10 @@
+import os
+
+# Batch mode is unattended — tqdm progress bars from akshare/yfinance/third-party
+# libraries spam the terminal and break the Rich TUI layout. Disable globally.
+os.environ["TQDM_DISABLE"] = "1"
+
+import json
 import time
 from datetime import datetime
 from pathlib import Path
@@ -222,31 +229,63 @@ class BatchRunner:
         self._start_time = None
 
     def generate_summary(self) -> Path:
-        """Generate batch_summary.md. Returns path."""
+        """Generate batch_summary.md and batch_summary.json. Returns path to markdown."""
         lines = ["# Batch Analysis Report\n"]
-        lines.append("| Ticker | Company | Rating | Entry | Stop | Size | Status |")
-        lines.append("|--------|---------|--------|-------|------|------|--------|")
+        lines.append("| Ticker | Company | Rating | Entry | Stop | Size | Status | Details |")
+        lines.append("|--------|---------|--------|-------|------|------|--------|---------|")
 
         all_tickers = sorted(
             set(self.tickers) | set(self.summaries.keys()) | set(self.failures.keys())
         )
+        json_rows = []
         for ticker in all_tickers:
             if ticker in self.failures:
-                lines.append(f"| {ticker} | — | — | — | — | — | ❌ {self.failures[ticker]} |")
+                lines.append(f"| {ticker} | — | — | — | — | — | ❌ | — |")
+                json_rows.append({
+                    "ticker": ticker,
+                    "company": None,
+                    "rating": None,
+                    "entry": None,
+                    "stop": None,
+                    "size": None,
+                    "status": "failed",
+                    "error": self.failures[ticker],
+                })
             else:
                 s = self.summaries.get(ticker, {})
                 lines.append(
                     f"| {ticker} | {s.get('company', ticker)} | {s.get('rating', '—')} | "
-                    f"{s.get('entry', '—')} | {s.get('stop', '—')} | {s.get('size', '—')} | ✅ |"
+                    f"{s.get('entry', '—')} | {s.get('stop', '—')} | {s.get('size', '—')} | ✅ | "
+                    f"[Report](./{ticker}/complete_report.md) |"
                 )
+                json_rows.append({
+                    "ticker": ticker,
+                    "company": s.get("company", ticker),
+                    "rating": s.get("rating"),
+                    "entry": s.get("entry"),
+                    "stop": s.get("stop"),
+                    "size": s.get("size"),
+                    "status": "success",
+                    "error": None,
+                })
+
+        # Append failure details so errors are still readable without widening the table
+        if self.failures:
+            lines.append("\n## Failures\n")
+            for ticker, error in sorted(self.failures.items()):
+                lines.append(f"- **{ticker}**: {error}")
 
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        path = self.output_dir / "batch_summary.md"
-        path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        md_path = self.output_dir / "batch_summary.md"
+        md_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+        # Write JSON summary for downstream processing
+        json_path = self.output_dir / "batch_summary.json"
+        json_path.write_text(json.dumps(json_rows, ensure_ascii=False, indent=2), encoding="utf-8")
 
         # Translate if Chinese
         if self.profile_config.get("output_language") == "Chinese":
-            from cli.main import _translate_content
+            from cli.main import _translate_content, _split_translation_chunks
             from tradingagents.llm_clients.factory import create_llm_client
             try:
                 provider = self.profile_config.get("llm_provider", "openai")
@@ -255,10 +294,14 @@ class BatchRunner:
                 if model:
                     client = create_llm_client(provider, model, base_url)
                     llm = client.get_llm()
-                    translated = _translate_content(llm, path.read_text(encoding="utf-8"))
+                    content = md_path.read_text(encoding="utf-8")
+                    chunks = _split_translation_chunks(content)
+                    chunk_info = f" ({len(chunks)} chunks)" if len(chunks) > 1 else ""
+                    translated = _translate_content(llm, content)
                     cn_path = self.output_dir / "batch_summary_CN.md"
                     cn_path.write_text(translated, encoding="utf-8")
+                    console.print(f"  [green]✓[/green] [dim]{cn_path.name}{chunk_info}[/dim]")
             except Exception as e:
                 console.print(f"[yellow]Warning: Failed to translate batch summary: {e}[/yellow]")
 
-        return path
+        return md_path
