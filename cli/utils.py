@@ -15,6 +15,8 @@ ANALYST_ORDER = [
     ("Social Media Analyst", AnalystType.SOCIAL),
     ("News Analyst", AnalystType.NEWS),
     ("Fundamentals Analyst", AnalystType.FUNDAMENTALS),
+    ("Governance Analyst", AnalystType.GOVERNANCE),
+    ("Industry Analyst", AnalystType.INDUSTRY),
 ]
 
 
@@ -39,8 +41,24 @@ def get_ticker() -> str:
 
 
 def normalize_ticker_symbol(ticker: str) -> str:
-    """Normalize ticker input while preserving exchange suffixes and Chinese characters."""
-    return ticker.strip()
+    """Normalize ticker input while preserving exchange suffixes and Chinese characters.
+
+    Auto-appends .SS/.SZ/.BJ for 6-digit Chinese A-share numeric codes.
+    """
+    raw = ticker.strip()
+    if not raw:
+        return raw
+
+    # Already has an exchange suffix -> pass through
+    if "." in raw:
+        return raw.upper()
+
+    # Pure numeric -> treat as A-share code and append suffix
+    if raw.isdigit():
+        from tradingagents.ticker_resolver import _append_a_share_suffix
+        return _append_a_share_suffix(raw).upper()
+
+    return raw.upper()
 
 
 def get_analysis_date() -> str:
@@ -81,7 +99,8 @@ def select_analysts() -> List[AnalystType]:
     choices = questionary.checkbox(
         "Select Your [Analysts Team]:",
         choices=[
-            questionary.Choice(display, value=value) for display, value in ANALYST_ORDER
+            questionary.Choice(display, value=value, checked=True)
+            for display, value in ANALYST_ORDER
         ],
         instruction="\n- Press Space to select/unselect analysts\n- Press 'a' to select/unselect all\n- Press Enter when done",
         validate=lambda x: len(x) > 0 or "You must select at least one analyst.",
@@ -106,10 +125,11 @@ def select_research_depth() -> int:
     """Select research depth using an interactive selection."""
 
     # Define research depth options with their corresponding values
+    # Deep is first so power users can just hit Enter.
     DEPTH_OPTIONS = [
-        ("Shallow - Quick research, few debate and strategy discussion rounds", 1),
-        ("Medium - Middle ground, moderate debate rounds and strategy discussion", 3),
         ("Deep - Comprehensive research, in depth debate and strategy discussion", 5),
+        ("Medium - Middle ground, moderate debate rounds and strategy discussion", 3),
+        ("Shallow - Quick research, few debate and strategy discussion rounds", 1),
     ]
 
     choice = questionary.select(
@@ -332,8 +352,9 @@ def ask_output_language() -> str:
     choice = questionary.select(
         "Select Output Language:",
         choices=[
-            questionary.Choice("English (default)", "English"),
+            # Chinese first for A-share users who just want to hit Enter.
             questionary.Choice("Chinese (中文)", "Chinese"),
+            questionary.Choice("English (default)", "English"),
             questionary.Choice("Japanese (日本語)", "Japanese"),
             questionary.Choice("Korean (한국어)", "Korean"),
             questionary.Choice("Hindi (हिन्दी)", "Hindi"),
