@@ -221,5 +221,15 @@ __marimo__/
 # Generated reports
 reports/
 
+# User data (watchlists & profiles)
+watchlists/
+profiles/
+
+# Audit runtime artifacts
+audit_reports/
+
+# IDE-local agent rules (e.g. Antigravity)
+.agents/
+
 # macOS
 .DS_Store
