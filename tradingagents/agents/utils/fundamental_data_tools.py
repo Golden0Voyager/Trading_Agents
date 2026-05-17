@@ -75,3 +75,19 @@ def get_income_statement(
         str: A formatted report containing income statement data
     """
     return route_to_vendor("get_income_statement", ticker, freq, curr_date)
+
+
+@tool
+def get_earnings_estimates(
+    ticker: Annotated[str, "Ticker symbol"],
+) -> str:
+    """
+    Retrieve analyst earnings estimate consensus for a given ticker.
+    Shows forward-looking consensus expectations for revenue, EPS, and profit growth.
+    Uses the configured fundamental_data vendor (akshare for A-shares).
+    Args:
+        ticker (str): Ticker symbol
+    Returns:
+        str: A formatted report of earnings estimates
+    """
+    return route_to_vendor("get_earnings_estimates", ticker)
