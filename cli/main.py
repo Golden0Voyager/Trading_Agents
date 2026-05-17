@@ -59,6 +59,8 @@ class MessageBuffer:
         "social": "Social Analyst",
         "news": "News Analyst",
         "fundamentals": "Fundamentals Analyst",
+        "governance": "Governance Analyst",
+        "industry": "Industry Analyst",
     }
 
     # Report section mapping: section -> (analyst_key for filtering, finalizing_agent)
@@ -69,6 +71,8 @@ class MessageBuffer:
         "sentiment_report": ("social", "Social Analyst"),
         "news_report": ("news", "News Analyst"),
         "fundamentals_report": ("fundamentals", "Fundamentals Analyst"),
+        "governance_report": ("governance", "Governance Analyst"),
+        "industry_report": ("industry", "Industry Analyst"),
         "investment_plan": (None, "Research Manager"),
         "trader_investment_plan": (None, "Trader"),
         "final_trade_decision": (None, "Portfolio Manager"),
@@ -177,6 +181,8 @@ class MessageBuffer:
                 "sentiment_report": "Social Sentiment",
                 "news_report": "News Analysis",
                 "fundamentals_report": "Fundamentals Analysis",
+                "governance_report": "Governance Analysis",
+                "industry_report": "Industry Analysis",
                 "investment_plan": "Research Team Decision",
                 "trader_investment_plan": "Trading Team Plan",
                 "final_trade_decision": "Portfolio Management Decision",
@@ -290,6 +296,8 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
             "Social Analyst",
             "News Analyst",
             "Fundamentals Analyst",
+            "Governance Analyst",
+            "Industry Analyst",
         ],
         "Research Team": ["Bull Researcher", "Bear Researcher", "Research Manager"],
         "Trading Team": ["Trader"],
@@ -503,26 +511,48 @@ def get_user_selections():
         return Panel(box_content, border_style="blue", padding=(1, 2))
 
     # Step 1: Ticker symbol(s)
-    console.print(
-        create_question_box(
-            "Step 1: Ticker Symbol",
-            "Enter ticker symbol(s) to analyze, comma-separated for multiple (examples: SPY, AAPL,MSFT,GOOGL)",
-            "SPY",
-        )
-    )
-    raw_tickers = get_ticker()
-    tickers = _parse_tickers_input(raw_tickers)
-
-    # Resolve tickers
     from tradingagents.ticker_resolver import resolve_ticker
-    selected_tickers = []
-    for t in tickers:
-        try:
-            resolved = resolve_ticker(t)
-            selected_tickers.append(resolved["ticker"])
-        except Exception as e:
-            console.print(f"[yellow]解析提示 {t}: {e}[/yellow]")
-            selected_tickers.append(t)
+
+    while True:
+        console.print(
+            create_question_box(
+                "Step 1: Ticker Symbol",
+                "Enter ticker symbol(s) to analyze, comma-separated for multiple (examples: SPY, AAPL,MSFT,GOOGL)",
+                "SPY",
+            )
+        )
+        raw_tickers = get_ticker()
+        tickers = _parse_tickers_input(raw_tickers)
+
+        # Resolve tickers and show names for confirmation
+        selected_tickers = []
+        ticker_names = []
+        for t in tickers:
+            try:
+                resolved = resolve_ticker(t)
+                selected_tickers.append(resolved["ticker"])
+                name = resolved.get("company_name", "")
+                ticker_names.append(f"[cyan]{resolved['ticker']}[/cyan] {name}")
+            except Exception as e:
+                console.print(f"[yellow]解析提示 {t}: {e}[/yellow]")
+                selected_tickers.append(t.upper())
+                ticker_names.append(f"[cyan]{t.upper()}[/cyan] (未知)")
+
+        console.print("\n[bold]已解析股票:[/bold]")
+        for line in ticker_names:
+            console.print(f"  • {line}")
+
+        import questionary
+        confirmed = questionary.confirm(
+            "股票信息是否正确？",
+            default=True,
+            style=questionary.Style([
+                ("question", "fg:green bold"),
+            ]),
+        ).ask()
+        if confirmed:
+            break
+        console.print("[yellow]请重新输入股票代码...[/yellow]\n")
 
     if len(selected_tickers) == 1:
         selected_ticker = selected_tickers[0]
@@ -653,8 +683,31 @@ def get_analysis_date():
 
 
 def _parse_tickers_input(raw: str) -> list[str]:
-    """Parse comma-separated ticker input into a clean list."""
-    return [t.strip() for t in raw.split(",") if t.strip()]
+    """Parse comma-separated ticker input into a clean list.
+
+    Auto-appends .SS/.SZ/.BJ for 6-digit Chinese A-share numeric codes.
+    """
+    from tradingagents.ticker_resolver import _append_a_share_suffix
+
+    result = []
+    for t in raw.split(","):
+        t = t.strip()
+        if not t:
+            continue
+        # Already has an exchange suffix -> pass through
+        if "." in t:
+            result.append(t.upper())
+            continue
+        # Pure numeric -> treat as A-share code and append suffix
+        if t.isdigit():
+            try:
+                result.append(_append_a_share_suffix(t).upper())
+                continue
+            except ValueError:
+                # Unrecognised prefix — keep as-is and let downstream fail gracefully
+                pass
+        result.append(t.upper())
+    return result
 
 
 def ask_mode() -> str:
@@ -728,7 +781,7 @@ def select_profile_interactive() -> dict:
             try:
                 prof = load_profile(name)
                 cfg = prof.get("config", {})
-                summary = f"({cfg.get('llm_provider', '?')}, {cfg.get('deep_think_llm', '?')}, {len(cfg.get('analysts', []))} analysts, {cfg.get('output_language', '?')})"
+                summary = f"({cfg.get('llm_provider', '?')}, {cfg.get('deep_thinker', '?')}, {len(cfg.get('analysts', []))} analysts, {cfg.get('output_language', '?')})"
                 choices.append(questionary.Choice(f"{name}  {summary}", value=name))
             except Exception:
                 choices.append(questionary.Choice(name, value=name))
@@ -770,6 +823,8 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
         "market": "Market",
         "news": "News",
         "sentiment": "Sentiment",
+        "governance": "Governance",
+        "industry": "Industry",
         "bull": "Bull Researcher",
         "bear": "Bear Researcher",
         "manager": "Research Manager",
@@ -799,6 +854,14 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
         analysts_dir.mkdir(exist_ok=True)
         (analysts_dir / "fundamentals.md").write_text(final_state["fundamentals_report"], encoding="utf-8")
         analyst_parts.append((_file_titles["fundamentals"], final_state["fundamentals_report"]))
+    if final_state.get("governance_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "governance.md").write_text(final_state["governance_report"], encoding="utf-8")
+        analyst_parts.append((_file_titles["governance"], final_state["governance_report"]))
+    if final_state.get("industry_report"):
+        analysts_dir.mkdir(exist_ok=True)
+        (analysts_dir / "industry.md").write_text(final_state["industry_report"], encoding="utf-8")
+        analyst_parts.append((_file_titles["industry"], final_state["industry_report"]))
     if analyst_parts:
         content = "\n\n".join(f"### {name}\n{text}" for name, text in analyst_parts)
         sections.append(f"## {_titles['analyst_team']}\n\n{content}")
@@ -882,23 +945,137 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
     return save_path / "complete_report.md"
 
 
-def _translate_content(llm, content: str) -> str:
-    """Translate report content from English to Simplified Chinese using LLM."""
+def _split_translation_chunks(text: str, max_chunk_size: int = 8000) -> list[str]:
+    """Split markdown text into translation-safe chunks.
+
+    Optimized for DeepSeek V3.1 (8K output tokens):
+    - 8K output ≈ 12K Chinese chars ≈ ~10K English chars of source text.
+    - We use 8K as the target to leave headroom for the prompt + safety margin.
+
+    Splits at H2/H3 headers when possible, then at paragraph boundaries.
+    Never breaks inside triple-backtick code blocks or markdown tables.
+    """
+    lines = text.splitlines(keepends=True)
+    chunks: list[str] = []
+    current_chunk_lines: list[str] = []
+    current_size = 0
+    in_code_block = False
+    in_table = False
+
+    def flush_chunk() -> None:
+        nonlocal current_chunk_lines, current_size
+        if current_chunk_lines:
+            chunks.append("".join(current_chunk_lines).rstrip("\n"))
+            current_chunk_lines = []
+            current_size = 0
+
+    def is_header(line: str) -> bool:
+        stripped = line.lstrip()
+        return stripped.startswith("## ") or stripped.startswith("### ")
+
+    def is_table_row(line: str) -> bool:
+        stripped = line.strip()
+        return stripped.startswith("|") and stripped.endswith("|")
+
+    def is_table_separator(line: str) -> bool:
+        stripped = line.strip()
+        return stripped.startswith("|") and "---" in stripped
+
+    for line in lines:
+        line_size = len(line)
+        stripped = line.strip()
+
+        # Code block gate
+        if stripped.startswith("```"):
+            in_code_block = not in_code_block
+
+        # Table gate: table starts with a row containing |...| and continues
+        # until a blank line or non-table line.
+        if not in_code_block:
+            if is_table_row(line) or is_table_separator(line):
+                in_table = True
+            elif in_table and stripped != "":
+                # Non-empty, non-table line ends the table
+                in_table = False
+            # Blank lines inside tables are allowed (multi-row tables)
+
+        # Flush before a new header if we're near the limit
+        if is_header(line) and current_size > 0 and current_size + line_size > max_chunk_size:
+            flush_chunk()
+
+        current_chunk_lines.append(line)
+        current_size += line_size
+
+        # Flush at paragraph boundary only if we're outside special blocks
+        can_split = not in_code_block and not in_table
+        if can_split and stripped == "" and current_size >= max_chunk_size:
+            flush_chunk()
+
+        # Hard safety: force flush at 1.2x limit even inside blocks,
+        # to prevent runaway growth on pathological input.
+        if current_size >= int(max_chunk_size * 1.2):
+            flush_chunk()
+            in_table = False
+
+    flush_chunk()
+    return chunks
+
+
+def _translate_chunk(llm, chunk: str, is_first: bool = False, context: str = "") -> str:
+    """Translate a single chunk."""
     from langchain_core.messages import HumanMessage
 
-    prompt = (
-        "请将以下金融分析报告从英文翻译成简体中文。\n"
-        "要求：\n"
-        "1. 保留所有 markdown 格式（标题层级、列表、表格、代码块、引用等）\n"
-        "2. 保留所有专业金融术语的准确性\n"
-        "3. 保留所有数字、符号、日期和货币单位不变\n"
-        "4. 不要添加任何额外解释、总结或评论\n"
-        "5. 直接返回翻译后的正文，不要包裹在代码块中\n\n"
-        f"{content}"
-    )
+    if is_first:
+        prompt = (
+            "请将以下金融分析报告从英文翻译成简体中文。\n"
+            "要求：\n"
+            "1. 保留所有 markdown 格式（标题层级、列表、表格、代码块、引用等）\n"
+            "2. 保留所有专业金融术语的准确性\n"
+            "3. 保留所有数字、符号、日期和货币单位不变\n"
+            "4. 不要添加任何额外解释、总结或评论\n"
+            "5. 直接返回翻译后的正文，不要包裹在代码块中\n\n"
+            f"{chunk}"
+        )
+    else:
+        # Provide the tail of the previous chunk so the model can keep
+        # heading styles and terminology consistent across boundaries.
+        ctx = f"前文末尾：\n{context}\n\n" if context else ""
+        prompt = (
+            f"{ctx}"
+            "继续翻译以下报告内容（与前文衔接，保持格式、术语和语气一致）：\n\n"
+            f"{chunk}"
+        )
     messages = [HumanMessage(content=prompt)]
     response = llm.invoke(messages)
-    return response.content
+    return str(response.content)
+
+
+def _translate_content(llm, content: str) -> str:
+    """Translate report content from English to Simplified Chinese using LLM.
+
+    Large files are split into chunks at markdown headers / paragraph
+    boundaries to avoid model output-token truncation.
+    """
+    chunks = _split_translation_chunks(content)
+    if len(chunks) <= 1:
+        return _translate_chunk(llm, content, is_first=True)
+
+    translated_parts: list[str] = []
+    prev_tail = ""
+    for idx, chunk in enumerate(chunks):
+        # Provide the last few lines of the previous chunk as context so the
+        # model can maintain consistent heading style and narrative flow.
+        context = prev_tail[-300:] if prev_tail else ""
+        try:
+            translated = _translate_chunk(llm, chunk, is_first=(idx == 0), context=context)
+        except Exception:
+            # If a single chunk fails, mark it and continue so the user gets
+            # a partially-translated file rather than total loss.
+            translated = f"\n\n<!-- 翻译中断：第 {idx + 1}/{len(chunks)} 块调用失败，保留原文 -->\n\n{chunk}"
+        translated_parts.append(translated)
+        prev_tail = translated
+
+    return "\n\n".join(translated_parts)
 
 
 def run_translation_pipeline(save_path: Path, config: dict) -> None:
@@ -938,10 +1115,12 @@ def run_translation_pipeline(save_path: Path, config: dict) -> None:
     for file_path in files_to_translate:
         try:
             content = file_path.read_text(encoding="utf-8")
+            chunks = _split_translation_chunks(content)
+            chunk_info = f" ({len(chunks)} chunks)" if len(chunks) > 1 else ""
             translated = _translate_content(llm, content)
             output_path = file_path.with_suffix("").with_name(file_path.stem + "_CN.md")
             output_path.write_text(translated, encoding="utf-8")
-            console.print(f"  [green]✓[/green] [dim]{output_path.name}[/dim]")
+            console.print(f"  [green]✓[/green] [dim]{output_path.name}{chunk_info}[/dim]")
         except Exception as e:
             console.print(
                 f"[yellow]Warning: Failed to translate {file_path.name}: {e}[/yellow]"
@@ -963,6 +1142,8 @@ def display_complete_report(final_state):
         analysts.append(("News Analyst", final_state["news_report"]))
     if final_state.get("fundamentals_report"):
         analysts.append(("Fundamentals Analyst", final_state["fundamentals_report"]))
+    if final_state.get("governance_report"):
+        analysts.append(("Governance Analyst", final_state["governance_report"]))
     if analysts:
         console.print(Panel("[bold]I. Analyst Team Reports[/bold]", border_style="cyan"))
         for title, content in analysts:
@@ -1009,26 +1190,41 @@ def display_complete_report(final_state):
             console.print(Panel(Markdown(risk["judge_decision"]), title="Portfolio Manager", border_style="blue", padding=(1, 2)))
 
 
-def update_research_team_status(status):
-    """Update status for research team members (not Trader)."""
+def update_research_team_status(status_or_buffer, status=None):
+    """Update status for research team members (not Trader).
+
+    Supports two call signatures:
+      update_research_team_status("in_progress")
+      update_research_team_status(dashboard, "in_progress")
+    """
+    if status is None:
+        buffer = message_buffer
+        target_status = status_or_buffer
+    else:
+        buffer = status_or_buffer
+        target_status = status
     research_team = ["Bull Researcher", "Bear Researcher", "Research Manager"]
     for agent in research_team:
-        message_buffer.update_agent_status(agent, status)
+        buffer.update_agent_status(agent, target_status)
 
 
 # Ordered list of analysts for status transitions
-ANALYST_ORDER = ["market", "social", "news", "fundamentals"]
+ANALYST_ORDER = ["market", "social", "news", "fundamentals", "governance", "industry"]
 ANALYST_AGENT_NAMES = {
     "market": "Market Analyst",
     "social": "Social Analyst",
     "news": "News Analyst",
     "fundamentals": "Fundamentals Analyst",
+    "governance": "Governance Analyst",
+    "industry": "Industry Analyst",
 }
 ANALYST_REPORT_MAP = {
     "market": "market_report",
     "social": "sentiment_report",
     "news": "news_report",
     "fundamentals": "fundamentals_report",
+    "governance": "governance_report",
+    "industry": "industry_report",
 }
 
 
@@ -1148,9 +1344,10 @@ def format_tool_args(args, max_length=80) -> str:
         return result[:max_length - 3] + "..."
     return result
 
-def run_analysis(checkpoint: bool = False):
-    # First get all user selections
-    selections = get_user_selections()
+def run_analysis(checkpoint: bool = False, selections: dict | None = None):
+    # First get all user selections (if not provided)
+    if selections is None:
+        selections = get_user_selections()
 
     # Create config with selected research depth
     config = DEFAULT_CONFIG.copy()
@@ -1421,10 +1618,13 @@ def run_analysis(checkpoint: bool = False):
         display_complete_report(final_state)
 
 
-def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: bool = False):
+def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: bool = False, output_dir: Optional[Path] = None):
     """Run unattended batch analysis for multiple tickers."""
     timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = Path.cwd() / "reports" / f"batch_{timestamp}"
+    if output_dir is None:
+        output_dir = Path.cwd() / "reports" / f"batch_{timestamp}"
+    else:
+        output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
     runner = BatchRunner(
@@ -1480,7 +1680,7 @@ def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: boo
 @app.command()
 def analyze(
     checkpoint: bool = typer.Option(
-        False,
+        True,
         "--checkpoint",
         help="Enable checkpoint/resume: save state after each node so a crashed run can resume.",
     ),
@@ -1503,6 +1703,11 @@ def analyze(
         None,
         "--tickers",
         help="Comma-separated tickers for batch analysis (e.g. AAPL,MSFT,GOOGL).",
+    ),
+    output_dir: Optional[str] = typer.Option(
+        None,
+        "--output-dir",
+        help="Custom output directory for reports (default: ./reports).",
     ),
 ):
     if clear_checkpoints:
@@ -1542,7 +1747,7 @@ def analyze(
             console.print("[red]No tickers to analyze.[/red]")
             raise typer.Exit(1)
 
-        run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint)
+        run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None)
         return
 
     # Interactive mode
@@ -1564,7 +1769,6 @@ def analyze(
                 "openai_reasoning_effort": selections.get("openai_reasoning_effort"),
                 "anthropic_effort": selections.get("anthropic_effort"),
                 "output_language": selections.get("output_language", "English"),
-                "analysis_date": selections["analysis_date"],
             }
             save_prof = typer.prompt("Save this configuration as a profile?", default="Y").strip().upper()
             if save_prof in ("Y", "YES", ""):
@@ -1574,9 +1778,14 @@ def analyze(
 
         if len(ticker_list) == 1:
             # Fall back to single-stock flow for one ticker
-            run_analysis(checkpoint=checkpoint)
+            if profile_config is None:
+                # User just created a new profile via get_user_selections — pass selections through
+                run_analysis(checkpoint=checkpoint, selections=selections)
+            else:
+                # User selected an existing profile — use batch flow with a single ticker
+                run_batch_analysis([ticker_list[0]], profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None)
         else:
-            run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint)
+            run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None)
     else:
         # Single / custom mode
         selections = get_user_selections()
@@ -1594,11 +1803,10 @@ def analyze(
                 "openai_reasoning_effort": selections.get("openai_reasoning_effort"),
                 "anthropic_effort": selections.get("anthropic_effort"),
                 "output_language": selections.get("output_language", "English"),
-                "analysis_date": selections["analysis_date"],
             }
-            run_batch_analysis(tickers, profile_config, checkpoint=checkpoint)
+            run_batch_analysis(tickers, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None)
         else:
-            run_analysis(checkpoint=checkpoint)
+            run_analysis(checkpoint=checkpoint, selections=selections)
 
 
 if __name__ == "__main__":
