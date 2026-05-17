@@ -1,6 +1,6 @@
 from pathlib import Path
 
-_WATCHLISTS_DIR = Path.home() / ".tradingagents" / "watchlists"
+_WATCHLISTS_DIR = Path(__file__).parent.parent / "watchlists"
 
 
 def _ensure_dir() -> Path:
@@ -15,7 +15,10 @@ def parse_watchlist_content(content: str) -> list[str]:
         stripped = line.strip()
         if not stripped or stripped.startswith("#"):
             continue
-        tickers.append(stripped)
+        # Strip inline comments
+        code = stripped.split("#", 1)[0].strip()
+        if code:
+            tickers.append(code)
     return tickers
 
 
