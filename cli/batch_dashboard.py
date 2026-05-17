@@ -15,6 +15,8 @@ class BatchDashboard:
         self.current_report: Optional[str] = None
         self.messages: deque = deque(maxlen=100)
         self.tool_calls: deque = deque(maxlen=100)
+        self.selected_analysts: list[str] = []
+        self.report_sections: dict[str, Optional[str]] = {}
 
     def update_progress(self, current_ticker: str, completed: int, failed: int) -> None:
         self.current_ticker = current_ticker
@@ -24,8 +26,13 @@ class BatchDashboard:
     def set_agent_status(self, agent: str, status: str) -> None:
         self.agent_status[agent] = status
 
+    update_agent_status = set_agent_status
+
     def set_current_report(self, report: str) -> None:
         self.current_report = report
+
+    def update_report_section(self, section_name: str, content: str) -> None:
+        self.report_sections[section_name] = content
 
     def add_message(self, msg_type: str, content: str) -> None:
         from datetime import datetime
@@ -43,6 +50,7 @@ class BatchDashboard:
         self.current_report = None
         self.messages.clear()
         self.tool_calls.clear()
+        self.report_sections.clear()
 
 
 from rich.console import Console
@@ -100,7 +108,7 @@ def render_progress_panel(layout: Layout, dashboard: BatchDashboard) -> None:
     table.add_column("Status", style="yellow", justify="center", width=20)
 
     teams = {
-        "Analyst Team": ["Market Analyst", "Social Analyst", "News Analyst", "Fundamentals Analyst"],
+        "Analyst Team": ["Market Analyst", "Social Analyst", "News Analyst", "Fundamentals Analyst", "Governance Analyst", "Industry Analyst"],
         "Research Team": ["Bull Researcher", "Bear Researcher", "Research Manager"],
         "Trading Team": ["Trader"],
         "Risk Management": ["Aggressive Analyst", "Neutral Analyst", "Conservative Analyst"],
