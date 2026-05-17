@@ -1,4 +1,7 @@
+import logging
 from typing import Annotated
+
+logger = logging.getLogger(__name__)
 
 # Import from vendor-specific modules
 from .y_finance import (
@@ -30,6 +33,16 @@ from .akshare_vendor import (
     get_cashflow as get_akshare_cashflow,
     get_income_statement as get_akshare_income_statement,
     get_indicators as get_akshare_indicators,
+    get_news as get_akshare_news,
+    get_insider_transactions as get_akshare_insider_transactions,
+    get_company_announcements as get_akshare_company_announcements,
+    get_fund_flow as get_akshare_fund_flow,
+    get_northbound_hold as get_akshare_northbound_hold,
+    get_restricted_release as get_akshare_restricted_release,
+    get_industry_valuation as get_akshare_industry_valuation,
+    get_macro_indicators as get_akshare_macro_indicators,
+    get_earnings_estimates as get_akshare_earnings_estimates,
+    get_institutional_holdings as get_akshare_institutional_holdings,
 )
 from .akshare_common import is_a_share_ticker
 
@@ -47,7 +60,8 @@ TOOLS_CATEGORIES = {
     "technical_indicators": {
         "description": "Technical analysis indicators",
         "tools": [
-            "get_indicators"
+            "get_indicators",
+            "get_fund_flow",
         ]
     },
     "fundamental_data": {
@@ -56,7 +70,9 @@ TOOLS_CATEGORIES = {
             "get_fundamentals",
             "get_balance_sheet",
             "get_cashflow",
-            "get_income_statement"
+            "get_income_statement",
+            "get_industry_valuation",
+            "get_earnings_estimates",
         ]
     },
     "news_data": {
@@ -65,6 +81,10 @@ TOOLS_CATEGORIES = {
             "get_news",
             "get_global_news",
             "get_insider_transactions",
+            "get_restricted_release",
+            "get_institutional_holdings",
+            "get_northbound_hold",
+            "get_macro_indicators",
         ]
     }
 }
@@ -89,6 +109,9 @@ VENDOR_METHODS = {
         "yfinance": get_stock_stats_indicators_window,
         "akshare": get_akshare_indicators,
     },
+    "get_fund_flow": {
+        "akshare": get_akshare_fund_flow,
+    },
     # fundamental_data
     "get_fundamentals": {
         "alpha_vantage": get_alpha_vantage_fundamentals,
@@ -110,10 +133,17 @@ VENDOR_METHODS = {
         "yfinance": get_yfinance_income_statement,
         "akshare": get_akshare_income_statement,
     },
-    # news_data (akshare not yet wired for news/insider — left as yfinance/alpha_vantage)
+    "get_industry_valuation": {
+        "akshare": get_akshare_industry_valuation,
+    },
+    "get_earnings_estimates": {
+        "akshare": get_akshare_earnings_estimates,
+    },
+    # news_data
     "get_news": {
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
+        "akshare": get_akshare_news,
     },
     "get_global_news": {
         "yfinance": get_global_news_yfinance,
@@ -122,6 +152,22 @@ VENDOR_METHODS = {
     "get_insider_transactions": {
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
+        "akshare": get_akshare_insider_transactions,
+    },
+    "get_company_announcements": {
+        "akshare": get_akshare_company_announcements,
+    },
+    "get_restricted_release": {
+        "akshare": get_akshare_restricted_release,
+    },
+    "get_institutional_holdings": {
+        "akshare": get_akshare_institutional_holdings,
+    },
+    "get_northbound_hold": {
+        "akshare": get_akshare_northbound_hold,
+    },
+    "get_macro_indicators": {
+        "akshare": get_akshare_macro_indicators,
     },
 }
 
@@ -183,7 +229,16 @@ def route_to_vendor(method: str, *args, **kwargs):
 
         try:
             return impl_func(*args, **kwargs)
-        except AlphaVantageRateLimitError:
-            continue  # Only rate limits trigger fallback
+        except Exception as exc:
+            logger.debug(
+                "Vendor '%s' failed for method='%s' symbol='%s': %s(%s)",
+                vendor,
+                method,
+                args[0] if args else kwargs.get("symbol") or kwargs.get("ticker"),
+                type(exc).__name__,
+                exc,
+            )
+            continue  # Try next vendor in fallback chain
 
+    logger.error("No available vendor for method='%s' symbol='%s'", method, args[0] if args else kwargs.get("symbol") or kwargs.get("ticker"))
     raise RuntimeError(f"No available vendor for '{method}'")
