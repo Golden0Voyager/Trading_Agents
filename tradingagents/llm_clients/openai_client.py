@@ -125,7 +125,7 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
         return chat_result
 
     def with_structured_output(self, schema, *, method=None, **kwargs):
-        if self.model_name == "deepseek-reasoner":
+        if self.model_name.lower() in ("deepseek-reasoner", "deepseek-r1"):
             raise NotImplementedError(
                 "deepseek-reasoner does not support tool_choice; structured "
                 "output is unavailable. Agent factories fall back to "
