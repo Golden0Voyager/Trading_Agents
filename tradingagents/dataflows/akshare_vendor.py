@@ -8,6 +8,8 @@ monetary values pass through akshare_common.format_money_cn() so the unit
 from __future__ import annotations
 
 import logging
+import os
+from contextlib import contextmanager
 from datetime import datetime
 from typing import Annotated, Optional
 
@@ -19,10 +21,50 @@ from .stockstats_utils import _clean_dataframe
 
 logger = logging.getLogger(__name__)
 
+# ---------------------------------------------------------------------------
+# Patch akshare's tqdm so every progress bar carries context and looks tidy.
+# ---------------------------------------------------------------------------
+_current_akshare_task: str | None = None
+_original_get_tqdm = ak.utils.tqdm.get_tqdm
+
+
+def _patched_get_tqdm(enable: bool = True):
+    tqdm_cls = _original_get_tqdm(enable)
+    if not enable:
+        return tqdm_cls
+
+    class _AkshareTqdm(tqdm_cls):
+        def __init__(self, iterable=None, desc=None, *args, **kwargs):
+            if desc is None and _current_akshare_task:
+                desc = _current_akshare_task
+            kwargs.setdefault(
+                "bar_format",
+                "{desc} {percentage:3.0f}%|{bar:20}| {n_fmt}/{total_fmt} [{elapsed}<{remaining}]",
+            )
+            kwargs.setdefault("leave", False)
+            kwargs.setdefault("ncols", 100)
+            super().__init__(iterable, desc=desc, *args, **kwargs)
+
+    return _AkshareTqdm
+
+
+ak.utils.tqdm.get_tqdm = _patched_get_tqdm
+
 
 def _to_yyyymmdd(date_str: str) -> str:
     """Convert YYYY-MM-DD to YYYYMMDD (akshare's hist API format)."""
     return date_str.replace("-", "")
+
+
+@contextmanager
+def _akshare_task_context(task_desc: str):
+    """Set the global tqdm description for the duration of an akshare call."""
+    global _current_akshare_task
+    _current_akshare_task = task_desc
+    try:
+        yield
+    finally:
+        _current_akshare_task = None
 
 
 def get_stock_data(
@@ -33,7 +75,7 @@ def get_stock_data(
     """Fetch A-share daily OHLCV from Eastmoney via akshare (forward-adjusted)."""
     code = to_akshare_symbol(symbol, "bare")
 
-    with no_proxy():
+    with _akshare_task_context(f"📊 {symbol} 历史行情"), no_proxy():
         df = ak.stock_zh_a_hist(
             symbol=code,
             period="daily",
@@ -110,7 +152,7 @@ def get_fundamentals(
     """Combine company-info + latest performance report into a fundamentals brief."""
     bare = to_akshare_symbol(symbol, "bare")
 
-    with no_proxy():
+    with _akshare_task_context(f"📊 {symbol} 基本面"), no_proxy():
         info_df = _safe_call(ak.stock_individual_info_em, symbol=bare)
         report_date = _yjbb_report_date_for(curr_date)
         yjbb_df = _safe_call(ak.stock_yjbb_em, date=report_date)
@@ -179,7 +221,7 @@ def get_balance_sheet(
 ) -> str:
     """Fetch A-share balance sheet (latest report period) via akshare."""
     code = to_akshare_symbol(symbol, "upper_prefix")
-    with no_proxy():
+    with _akshare_task_context(f"📊 {symbol} 资产负债表"), no_proxy():
         df = ak.stock_balance_sheet_by_report_em(symbol=code)
 
     if df is None or df.empty:
@@ -202,7 +244,7 @@ def get_cashflow(
 ) -> str:
     """Fetch A-share cash flow statement (latest report period) via akshare."""
     code = to_akshare_symbol(symbol, "upper_prefix")
-    with no_proxy():
+    with _akshare_task_context(f"📊 {symbol} 现金流量表"), no_proxy():
         df = ak.stock_cash_flow_sheet_by_report_em(symbol=code)
 
     if df is None or df.empty:
@@ -265,7 +307,7 @@ def get_income_statement(
 ) -> str:
     """Fetch A-share income statement (latest report period) via akshare."""
     code = to_akshare_symbol(symbol, "upper_prefix")
-    with no_proxy():
+    with _akshare_task_context(f"📊 {symbol} 利润表"), no_proxy():
         df = ak.stock_profit_sheet_by_report_em(symbol=code)
 
     if df is None or df.empty:
@@ -288,7 +330,12 @@ def get_indicators(
     curr_date: Annotated[str, "Current date YYYY-MM-DD"],
     look_back_days: Annotated[int, "How many trading days to report"],
 ) -> str:
-    """Compute a stockstats indicator window on akshare-sourced A-share K-line."""
+    """Compute a stockstats indicator window on akshare-sourced A-share K-line.
+
+    Raises on network/connection errors so ``route_to_vendor`` can fall back to
+    yfinance. Returns a plain-string message only for soft data issues (empty
+    DataFrame, unknown indicator, etc.).
+    """
     from stockstats import wrap
 
     bare = to_akshare_symbol(symbol, "bare")
@@ -296,7 +343,7 @@ def get_indicators(
     # Pull enough history to warm up long indicators (e.g. 200 SMA).
     start = end - pd.Timedelta(days=look_back_days * 2 + 260)
 
-    with no_proxy():
+    with _akshare_task_context(f"📊 {symbol} 技术指标({indicator})"), no_proxy():
         df = ak.stock_zh_a_hist(
             symbol=bare,
             period="daily",
@@ -325,4 +372,423 @@ def get_indicators(
     for _, row in tail.iterrows():
         v = row[indicator]
         lines.append(f"{row['Date']}: {'N/A' if pd.isna(v) else v}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# News, announcements & governance data
+# ---------------------------------------------------------------------------
+
+
+def get_news(
+    symbol: Annotated[str, "A-share ticker e.g. 300454.SZ"],
+    start_date: Annotated[str, "Start date YYYY-MM-DD"],
+    end_date: Annotated[str, "End date YYYY-MM-DD"],
+) -> str:
+    """Fetch A-share company-specific news from Eastmoney via akshare."""
+    code = to_akshare_symbol(symbol, "bare")
+    start_dt = datetime.strptime(start_date, "%Y-%m-%d")
+    end_dt = datetime.strptime(end_date, "%Y-%m-%d")
+
+    with _akshare_task_context(f"📰 {symbol} 个股新闻"), no_proxy():
+        df = _safe_call(ak.stock_news_em, symbol=code)
+
+    if df is None or df.empty:
+        return f"No news found for {symbol} between {start_date} and {end_date} via akshare."
+
+    # Filter by date
+    df["发布时间"] = pd.to_datetime(df["发布时间"], errors="coerce")
+    mask = (df["发布时间"] >= start_dt) & (df["发布时间"] <= end_dt + pd.Timedelta(days=1))
+    df = df[mask]
+
+    if df.empty:
+        return f"No news found for {symbol} between {start_date} and {end_date} via akshare."
+
+    lines = [
+        f"## {symbol.upper()} News from {start_date} to {end_date} (source: akshare / Eastmoney)\n",
+        f"Total articles: {len(df)}\n",
+    ]
+    for _, row in df.iterrows():
+        lines.append(f"### {row['新闻标题']} (source: {row['文章来源']})")
+        if row.get("新闻内容"):
+            content = str(row["新闻内容"]).strip()
+            if content:
+                lines.append(content)
+        if row.get("发布时间"):
+            lines.append(f"Published: {row['发布时间']}")
+        if row.get("新闻链接"):
+            lines.append(f"Link: {row['新闻链接']}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def get_insider_transactions(
+    symbol: Annotated[str, "A-share ticker e.g. 300454.SZ"],
+) -> str:
+    """Fetch A-share shareholder change data from 10jqka via akshare."""
+    code = to_akshare_symbol(symbol, "bare")
+
+    with _akshare_task_context(f"🏛 {symbol} 股东变动"), no_proxy():
+        df = _safe_call(ak.stock_shareholder_change_ths, symbol=code)
+
+    if df is None or df.empty:
+        return f"No shareholder change data found for {symbol} via akshare."
+
+    lines = [
+        f"## {symbol.upper()} Shareholder Changes (source: akshare / 同花顺)\n",
+        f"Total records: {len(df)}\n",
+    ]
+    for _, row in df.iterrows():
+        lines.append(f"- **公告日期**: {row.get('公告日期', 'N/A')}")
+        lines.append(f"  **变动股东**: {row.get('变动股东', 'N/A')}")
+        lines.append(f"  **变动数量**: {row.get('变动数量', 'N/A')}")
+        lines.append(f"  **交易均价**: {row.get('交易均价', 'N/A')}")
+        lines.append(f"  **剩余股份**: {row.get('剩余股份总数', 'N/A')}")
+        lines.append(f"  **变动期间**: {row.get('变动期间', 'N/A')}")
+        lines.append(f"  **变动途径**: {row.get('变动途径', 'N/A')}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def get_company_announcements(
+    symbol: Annotated[str, "A-share ticker e.g. 300454.SZ"],
+    start_date: Annotated[str, "Start date YYYY-MM-DD"],
+    end_date: Annotated[str, "End date YYYY-MM-DD"],
+) -> str:
+    """Fetch A-share company announcements/notices from Eastmoney via akshare."""
+    code = to_akshare_symbol(symbol, "bare")
+
+    with _akshare_task_context(f"📋 {symbol} 公司公告"), no_proxy():
+        df = _safe_call(
+            ak.stock_individual_notice_report,
+            security=code,
+            begin_date=start_date,
+            end_date=end_date,
+        )
+
+    if df is None or df.empty:
+        return (
+            f"No company announcements found for {symbol} "
+            f"between {start_date} and {end_date} via akshare."
+        )
+
+    lines = [
+        f"## {symbol.upper()} Company Announcements from {start_date} to {end_date} "
+        f"(source: akshare / Eastmoney)\n",
+        f"Total notices: {len(df)}\n",
+    ]
+    for _, row in df.iterrows():
+        lines.append(f"### {row.get('公告标题', 'N/A')}")
+        if row.get("公告类型"):
+            lines.append(f"**Type**: {row['公告类型']}")
+        if row.get("公告日期"):
+            lines.append(f"**Date**: {row['公告日期']}")
+        if row.get("网址"):
+            lines.append(f"**Link**: {row['网址']}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Fund flow & northbound data
+# ---------------------------------------------------------------------------
+
+
+def get_fund_flow(symbol: str) -> str:
+    """Fetch A-share individual stock fund flow (主力/超大单/大单/中单/小单)."""
+    code = to_akshare_symbol(symbol, "bare")
+    prefix = to_akshare_symbol(symbol, "lower_prefix")[:2]  # "sh" or "sz"
+
+    with _akshare_task_context(f"💰 {symbol} 资金流向"), no_proxy():
+        df = _safe_call(ak.stock_individual_fund_flow, stock=code, market=prefix)
+
+    if df is None or df.empty:
+        return f"No fund flow data found for {symbol} via akshare."
+
+    # Keep last 5 trading days
+    df = df.head(5)
+    lines = [
+        f"## {symbol.upper()} Fund Flow (source: akshare / Eastmoney)",
+        f"Total records: {len(df)} trading days",
+        "",
+    ]
+    for _, row in df.iterrows():
+        lines.append(f"**Date**: {row.get('日期', 'N/A')}")
+        lines.append(f"- Close: {row.get('收盘价', 'N/A')}")
+        lines.append(f"- Change: {row.get('涨跌幅', 'N/A')}%")
+        lines.append(f"- Main Force Net Inflow: {row.get('主力净流入-净额', 'N/A')} ({row.get('主力净流入-净占比', 'N/A')}%)")
+        lines.append(f"- Super Large Order Net Inflow: {row.get('超大单净流入-净额', 'N/A')} ({row.get('超大单净流入-净占比', 'N/A')}%)")
+        lines.append(f"- Large Order Net Inflow: {row.get('大单净流入-净额', 'N/A')} ({row.get('大单净流入-净占比', 'N/A')}%)")
+        lines.append(f"- Medium Order Net Inflow: {row.get('中单净流入-净额', 'N/A')} ({row.get('中单净流入-净占比', 'N/A')}%)")
+        lines.append(f"- Small Order Net Inflow: {row.get('小单净流入-净额', 'N/A')} ({row.get('小单净流入-净占比', 'N/A')}%)")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+def get_northbound_hold(symbol: str) -> str:
+    """Fetch A-share northbound (Stock Connect) holding data."""
+    code = to_akshare_symbol(symbol, "bare")
+    prefix = to_akshare_symbol(symbol, "lower_prefix")[:2]
+
+    with _akshare_task_context(f"🌏 {symbol} 北向资金"), no_proxy():
+        df = _safe_call(ak.stock_hsgt_individual_em, stock=code, market=prefix)
+
+    if df is None or df.empty:
+        return f"No northbound holding data found for {symbol} via akshare."
+
+    df = df.head(5)
+    lines = [
+        f"## {symbol.upper()} Northbound (Stock Connect) Holdings (source: akshare / Eastmoney)",
+        f"Total records: {len(df)} trading days",
+        "",
+    ]
+    for _, row in df.iterrows():
+        lines.append(f"**Date**: {row.get('日期', 'N/A')}")
+        lines.append(f"- Holding Shares: {row.get('持股数量', 'N/A')}")
+        lines.append(f"- Holding Market Value: {row.get('持股市值', 'N/A')}")
+        lines.append(f"- % of Tradable Shares: {row.get('占流通股比例', 'N/A')}%")
+        lines.append(f"- Net Buy (shares): {row.get('当日成交净买额', 'N/A')}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Restricted share release
+# ---------------------------------------------------------------------------
+
+
+def get_restricted_release(
+    symbol: Annotated[str, "A-share ticker"],
+    start_date: Annotated[str, "Start date YYYY-MM-DD"],
+    end_date: Annotated[str, "End date YYYY-MM-DD"],
+) -> str:
+    """Fetch A-share restricted share release (限售解禁) details."""
+    code = to_akshare_symbol(symbol, "bare")
+
+    with _akshare_task_context(f"🔓 {symbol} 限售解禁"), no_proxy():
+        df = _safe_call(
+            ak.stock_restricted_release_detail_em,
+            start_date=start_date,
+            end_date=end_date,
+        )
+
+    if df is None or df.empty:
+        return (
+            f"No restricted share release data found for {symbol} "
+            f"between {start_date} and {end_date} via akshare."
+        )
+
+    # Client-side filter by stock code
+    if "股票代码" in df.columns:
+        df = df[df["股票代码"].astype(str).str.strip() == code]
+
+    if df.empty:
+        return (
+            f"No restricted share release events for {symbol} "
+            f"between {start_date} and {end_date}."
+        )
+
+    lines = [
+        f"## {symbol.upper()} Restricted Share Release (source: akshare / Eastmoney)",
+        f"Total events: {len(df)}",
+        "",
+    ]
+    for _, row in df.iterrows():
+        lines.append(f"**Release Date**: {row.get('解禁时间', 'N/A')}")
+        lines.append(f"- Type: {row.get('限售股类型', 'N/A')}")
+        lines.append(f"- Release Quantity: {row.get('解禁数量', 'N/A')}")
+        lines.append(f"- Actual Release Market Value: {row.get('实际解禁市值', 'N/A')}")
+        lines.append(f"- % of Pre-release Float Cap: {row.get('占解禁前流通市值比例', 'N/A')}")
+        lines.append(f"- Pre-release Close Price: {row.get('解禁前一交易日收盘价', 'N/A')}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Industry valuation comparison
+# ---------------------------------------------------------------------------
+
+
+def get_industry_valuation(symbol: str) -> str:
+    """Fetch A-share industry valuation comparison (PE/PB) for the given stock."""
+    code = to_akshare_symbol(symbol, "bare")
+
+    with _akshare_task_context(f"🏭 {symbol} 行业估值"), no_proxy():
+        pe_df = _safe_call(ak.stock_a_pe)
+        info_df = _safe_call(ak.stock_individual_info_em, symbol=code)
+
+    if pe_df is None or pe_df.empty:
+        return f"No industry valuation data available for {symbol} via akshare."
+
+    # Locate target stock
+    target_rows = pe_df[pe_df["股票代码"].astype(str).str.strip() == code]
+    if target_rows.empty:
+        return f"Stock {symbol} not found in valuation database."
+
+    target = target_rows.iloc[0]
+    industry = target.get("所处行业", "")
+
+    lines = [
+        f"## {symbol.upper()} Industry Valuation Comparison (source: akshare / Eastmoney)",
+        "",
+    ]
+
+    # Target stock metrics
+    lines.append(f"### {symbol.upper()} Current Valuation")
+    lines.append(f"- Industry: {industry or 'N/A'}")
+    lines.append(f"- Latest Price: {target.get('最新价', 'N/A')}")
+    lines.append(f"- PE (Dynamic): {target.get('市盈率-动态', 'N/A')}")
+    lines.append(f"- PE (TTM): {target.get('市盈率-TTM', 'N/A')}")
+    lines.append(f"- PE (Static): {target.get('市盈率-静态', 'N/A')}")
+    lines.append(f"- PB: {target.get('市净率', 'N/A')}")
+    lines.append("")
+
+    # Industry comparison
+    if industry:
+        industry_pe = pe_df[pe_df["所处行业"] == industry]
+        if not industry_pe.empty:
+            pe_dyn = pd.to_numeric(industry_pe["市盈率-动态"], errors="coerce").dropna()
+            pe_ttm = pd.to_numeric(industry_pe["市盈率-TTM"], errors="coerce").dropna()
+            pb = pd.to_numeric(industry_pe["市净率"], errors="coerce").dropna()
+
+            lines.append(f"### Industry Comparison ({industry})")
+            lines.append(f"- Industry Sample Size: {len(industry_pe)} stocks")
+
+            if not pe_dyn.empty:
+                target_pe = safe_float(target.get("市盈率-动态"))
+                lines.append(f"- PE (Dynamic) Industry Median: {pe_dyn.median():.2f}")
+                lines.append(f"- PE (Dynamic) Industry Mean: {pe_dyn.mean():.2f}")
+                if target_pe is not None:
+                    pct = (pe_dyn < target_pe).mean() * 100
+                    lines.append(f"- {symbol.upper()} PE Rank: {pct:.1f}% of peers have lower PE (higher = more expensive)")
+
+            if not pe_ttm.empty:
+                target_pe_ttm = safe_float(target.get("市盈率-TTM"))
+                lines.append(f"- PE (TTM) Industry Median: {pe_ttm.median():.2f}")
+                if target_pe_ttm is not None:
+                    pct = (pe_ttm < target_pe_ttm).mean() * 100
+                    lines.append(f"- {symbol.upper()} PE-TTM Rank: {pct:.1f}% of peers have lower PE-TTM")
+
+            if not pb.empty:
+                target_pb = safe_float(target.get("市净率"))
+                lines.append(f"- PB Industry Median: {pb.median():.2f}")
+                if target_pb is not None:
+                    pct = (pb < target_pb).mean() * 100
+                    lines.append(f"- {symbol.upper()} PB Rank: {pct:.1f}% of peers have lower PB")
+            lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Macro quantitative indicators
+# ---------------------------------------------------------------------------
+
+
+def get_macro_indicators(
+    indicator: Annotated[str, 'Macro indicator: "pmi", "cpi", "m2", "social_finance"'],
+) -> str:
+    """Fetch China macro quantitative indicators via akshare."""
+    indicator = indicator.lower().strip()
+
+    with _akshare_task_context(f"📈 宏观指标: {indicator}"), no_proxy():
+        if indicator == "pmi":
+            df = _safe_call(ak.macro_china_pmi)
+            title = "China Manufacturing & Non-Manufacturing PMI"
+            cols = ["月份", "制造业-指数", "制造业-同比增长", "非制造业-指数", "非制造业-同比增长"]
+        elif indicator == "cpi":
+            df = _safe_call(ak.macro_china_cpi)
+            title = "China Consumer Price Index (CPI)"
+            cols = None  # use all cols
+        elif indicator == "m2":
+            df = _safe_call(ak.macro_china_m2)
+            title = "China M2 Money Supply"
+            cols = None
+        elif indicator in ("social_finance", "社融"):
+            df = _safe_call(ak.macro_china_shrzgm)
+            title = "China Aggregate Social Financing"
+            cols = None
+        else:
+            return f"Unsupported macro indicator: {indicator}. Supported: pmi, cpi, m2, social_finance."
+
+    if df is None or df.empty:
+        return f"No macro data available for indicator '{indicator}' via akshare."
+
+    # Keep last 6 periods
+    df = df.head(6)
+    lines = [f"## {title} (source: akshare)", f"Total records: {len(df)}", ""]
+
+    display_cols = cols if cols else list(df.columns)
+    for _, row in df.iterrows():
+        for col in display_cols:
+            if col in row:
+                lines.append(f"- {col}: {row[col]}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Earnings estimates (analyst consensus)
+# ---------------------------------------------------------------------------
+
+
+def get_earnings_estimates(symbol: str) -> str:
+    """Fetch A-share analyst earnings estimate consensus via akshare."""
+    code = to_akshare_symbol(symbol, "bare")
+
+    with _akshare_task_context(f"📊 {symbol} 盈利预测"), no_proxy():
+        df = _safe_call(ak.stock_yjyg_em, symbol=code)
+
+    if df is None or df.empty:
+        return f"No earnings estimate data found for {symbol} via akshare."
+
+    lines = [
+        f"## {symbol.upper()} Analyst Earnings Estimates (source: akshare / Eastmoney)",
+        f"Total records: {len(df)}",
+        "",
+    ]
+    for _, row in df.iterrows():
+        lines.append(f"**Report Period**: {row.get('报告期', 'N/A')}")
+        lines.append(f"- Forecast Type: {row.get('预告类型', 'N/A')}")
+        lines.append(f"- Forecast Content: {row.get('预告内容', 'N/A')}")
+        lines.append(f"- Forecast Reason: {row.get('预告原因', 'N/A')}")
+        lines.append(f"- Change Lower Limit: {row.get('变动下限', 'N/A')}")
+        lines.append(f"- Change Upper Limit: {row.get('变动上限', 'N/A')}")
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# Institutional holdings
+# ---------------------------------------------------------------------------
+
+
+def get_institutional_holdings(symbol: str) -> str:
+    """Fetch A-share top shareholders and institutional holdings via akshare."""
+    code = to_akshare_symbol(symbol, "bare")
+
+    with _akshare_task_context(f"🏛 {symbol} 机构持仓"), no_proxy():
+        holder_df = _safe_call(ak.stock_main_stock_holder, symbol=code)
+
+    lines = [
+        f"## {symbol.upper()} Institutional Holdings (source: akshare / Eastmoney)",
+        "",
+    ]
+
+    if holder_df is not None and not holder_df.empty:
+        lines.append(f"### Top Shareholders ({len(holder_df)} records)")
+        for _, row in holder_df.iterrows():
+            lines.append(f"- {row.get('股东名称', 'N/A')}: {row.get('持股数量', 'N/A')} shares ({row.get('持股比例', 'N/A')}%)")
+        lines.append("")
+    else:
+        lines.append("No top shareholder data available.")
+
     return "\n".join(lines)
