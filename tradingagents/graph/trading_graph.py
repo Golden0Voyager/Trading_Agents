@@ -36,7 +36,12 @@ from tradingagents.agents.utils.agent_utils import (
     get_income_statement,
     get_news,
     get_insider_transactions,
-    get_global_news
+    get_global_news,
+    get_company_announcements,
+    get_restricted_release,
+    get_institutional_holdings,
+    get_northbound_hold,
+    get_industry_valuation,
 )
 
 from .checkpointer import checkpoint_step, clear_checkpoint, get_checkpointer, thread_id
@@ -171,10 +176,28 @@ class TradingAgentsGraph:
             ),
             "news": ToolNode(
                 [
-                    # News and insider information
+                    # News, insider information and company announcements
                     get_news,
                     get_global_news,
                     get_insider_transactions,
+                    get_company_announcements,
+                ]
+            ),
+            "governance": ToolNode(
+                [
+                    # Governance analysis tools
+                    get_company_announcements,
+                    get_insider_transactions,
+                    get_news,
+                    get_restricted_release,
+                    get_institutional_holdings,
+                    get_northbound_hold,
+                ]
+            ),
+            "industry": ToolNode(
+                [
+                    # Industry valuation comparison
+                    get_industry_valuation,
                 ]
             ),
             "fundamentals": ToolNode(
@@ -361,6 +384,8 @@ class TradingAgentsGraph:
             "sentiment_report": final_state["sentiment_report"],
             "news_report": final_state["news_report"],
             "fundamentals_report": final_state["fundamentals_report"],
+            "governance_report": final_state["governance_report"],
+            "industry_report": final_state["industry_report"],
             "investment_debate_state": {
                 "bull_history": final_state["investment_debate_state"]["bull_history"],
                 "bear_history": final_state["investment_debate_state"]["bear_history"],
