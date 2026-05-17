@@ -2,7 +2,7 @@ import json
 from pathlib import Path
 from typing import Optional
 
-_PROFILES_DIR = Path.home() / ".tradingagents" / "profiles"
+_PROFILES_DIR = Path(__file__).parent.parent / "profiles"
 
 
 def _ensure_dir() -> Path:
