@@ -527,7 +527,8 @@ def save_report_to_disk(final_state, ticker: str, save_path: Path):
             sections.append(f"## {_titles['portfolio']}\n\n### {_file_titles['decision']}\n{risk['judge_decision']}")
 
     # Write consolidated report
-    header = f"# {_titles['header']}: {ticker}\n\n{_titles['generated']}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    trade_date = final_state.get("trade_date", "")
+    header = f"# {_titles['header']}: {ticker}\n\n{_titles['generated']}: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\nAnalysis Date: {trade_date}\n\n"
     (save_path / "complete_report.md").write_text(header + "\n\n".join(sections), encoding="utf-8")
 
     # Merge per-subfolder markdown files into flat merged docs
@@ -794,11 +795,74 @@ def display_complete_report(final_state):
             console.print(Panel(Markdown(risk["judge_decision"]), title="Portfolio Manager", border_style="blue", padding=(1, 2)))
 
 
+def _resolve_holdings(
+    holdings_sheet: str | None,
+    holdings_worksheet: str,
+    sync_holdings: bool,
+) -> dict | None:
+    """Resolve holdings from local cache, optionally syncing from Google Sheet first.
 
-        return result[:max_length - 3] + "..."
-    return result
+    Returns a flat dict compatible with the existing holdings_context format:
+    {ticker: {"shares": float, "avg_cost": float, ...}}
+    """
+    from tradingagents.portfolio import PortfolioRepository, PortfolioSyncService
 
-def run_analysis(checkpoint: bool = False, selections: dict | None = None):
+    repo = PortfolioRepository()
+    needs_sync = sync_holdings or holdings_sheet is not None
+
+    if needs_sync:
+        sheet_id = holdings_sheet or DEFAULT_CONFIG.get("portfolio", {}).get("sheet_id")
+        if not sheet_id:
+            console.print(
+                "[red]No sheet ID configured. Use --holdings-sheet or set "
+                "portfolio.sheet_id in config.[/red]"
+            )
+            return None
+
+        worksheet = holdings_worksheet or DEFAULT_CONFIG.get("portfolio", {}).get("worksheet", "total")
+        try:
+            sync_service = PortfolioSyncService(sheet_id=sheet_id, worksheet=worksheet)
+            portfolio = sync_service.sync()
+            repo.save(portfolio)
+            console.print(
+                f"[green]✓ Synced {len(portfolio.holdings)} holdings to local cache[/green] "
+                f"([dim]{repo.path}[/dim])"
+            )
+        except Exception as exc:
+            console.print(f"[yellow]⚠ Sync failed: {exc}[/yellow]")
+            if not repo.exists():
+                console.print("[red]No local cache available. Run with --holdings-sheet first.[/red]")
+                return None
+            console.print("[dim]Using last known local cache[/dim]")
+
+    if repo.exists():
+        try:
+            portfolio = repo.load()
+            console.print(
+                f"[green]✓ Loaded {len(portfolio.holdings)} holdings from local cache[/green] "
+                f"([dim]{portfolio.metadata.updated_at or 'unknown'}[/dim])"
+            )
+            # Convert to legacy flat dict for backward compatibility
+            return {
+                ticker: {
+                    "ticker": ticker,
+                    "shares": h.shares,
+                    "avg_cost": h.avg_cost,
+                    "market_price": h.market_price,
+                    "pnl_pct": h.pnl_pct,
+                    "weight": h.weight,
+                    "grid_strategy": h.grid_strategy,
+                    "name": h.name,
+                }
+                for ticker, h in portfolio.holdings.items()
+            }
+        except Exception as exc:
+            console.print(f"[yellow]⚠ Failed to load local holdings: {exc}[/yellow]")
+
+    return None
+
+
+def run_analysis(checkpoint: bool = False, selections: dict | None = None, holdings: dict | None = None):
     # First get all user selections (if not provided)
     if selections is None:
         selections = get_user_selections()
@@ -841,6 +905,22 @@ def run_analysis(checkpoint: bool = False, selections: dict | None = None):
     report_dir.mkdir(parents=True, exist_ok=True)
     log_file = results_dir / "message_tool.log"
     log_file.touch(exist_ok=True)
+
+    # Prompt to skip if a complete report already exists for this ticker+date
+    existing_report = results_dir / "complete_report.md"
+    if existing_report.exists() and existing_report.stat().st_size > 0:
+        report_date = BatchRunner._parse_report_analysis_date(existing_report)
+        if report_date == selections["analysis_date"]:
+            import questionary
+            skip = questionary.confirm(
+                f"检测到 {selections['ticker']} 在 {selections['analysis_date']} 已有完整分析报告，是否跳过分析直接查看？",
+                default=True,
+            ).ask()
+            if skip:
+                console.print(f"\n[green]加载已有报告: {existing_report.resolve()}[/green]\n")
+                report_content = existing_report.read_text(encoding="utf-8")
+                console.print(Markdown(report_content))
+                return
 
     def save_message_decorator(obj, func_name):
         func = getattr(obj, func_name)
@@ -920,6 +1000,20 @@ def run_analysis(checkpoint: bool = False, selections: dict | None = None):
         init_agent_state = graph.propagator.create_initial_state(
             selections["ticker"], selections["analysis_date"]
         )
+        if holdings:
+            init_agent_state["holdings_context"] = holdings
+        # Inject transaction history if available
+        try:
+            from tradingagents.portfolio import PortfolioRepository
+            repo = PortfolioRepository()
+            if repo.exists():
+                portfolio = repo.load()
+                if portfolio.transactions:
+                    init_agent_state["transactions_context"] = [
+                        t.to_dict() for t in portfolio.transactions
+                    ]
+        except Exception:
+            pass
         args = graph.propagator.get_graph_args(callbacks=[stats_handler])
 
         trace = []
@@ -989,10 +1083,14 @@ def run_analysis(checkpoint: bool = False, selections: dict | None = None):
     if display_choice in ("Y", "YES", ""):
         display_complete_report(final_state)
 
+    # Always save to results_dir so future runs can detect and skip
+    try:
+        save_report_to_disk(final_state, selections["ticker"], results_dir)
+    except Exception:
+        pass
 
 
-
-def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: bool = False, output_dir: Optional[Path] = None, watchlist_name: Optional[str] = None):
+def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: bool = False, output_dir: Optional[Path] = None, watchlist_name: Optional[str] = None, holdings: dict | None = None):
     """Run unattended batch analysis for multiple tickers."""
     date_stamp = __import__("datetime").datetime.now().strftime("%Y%m%d")
     if output_dir is None:
@@ -1007,6 +1105,7 @@ def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: boo
         profile_config=profile_config,
         output_dir=output_dir,
         checkpoint=checkpoint,
+        holdings=holdings,
     )
     runner.run()
 
@@ -1084,11 +1183,33 @@ def analyze(
         "--output-dir",
         help="Custom output directory for reports (default: ./reports).",
     ),
+    holdings_sheet: Optional[str] = typer.Option(
+        None,
+        "--holdings-sheet",
+        help="Google Sheet ID to load current holdings for position-aware analysis.",
+    ),
+    holdings_worksheet: str = typer.Option(
+        "total",
+        "--holdings-worksheet",
+        help="Worksheet/tab name inside the holdings Google Sheet.",
+    ),
+    sync_holdings: bool = typer.Option(
+        False,
+        "--sync-holdings",
+        help="Sync holdings from Google Sheet to local cache before analysis.",
+    ),
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
         n = clear_all_checkpoints(DEFAULT_CONFIG["data_cache_dir"])
         console.print(f"[yellow]Cleared {n} checkpoint(s).[/yellow]")
+
+    # Resolve holdings: sync if requested, then read from local cache
+    holdings = _resolve_holdings(
+        holdings_sheet=holdings_sheet,
+        holdings_worksheet=holdings_worksheet,
+        sync_holdings=sync_holdings,
+    )
 
     # Direct batch mode via CLI args
     if profile or watchlist or tickers:
@@ -1122,7 +1243,14 @@ def analyze(
             console.print("[red]No tickers to analyze.[/red]")
             raise typer.Exit(1)
 
-        run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist)
+        run_batch_analysis(
+            ticker_list,
+            profile_config,
+            checkpoint=checkpoint,
+            output_dir=Path(output_dir) if output_dir else None,
+            watchlist_name=watchlist,
+            holdings=holdings,
+        )
         return
 
     # Interactive mode
@@ -1156,12 +1284,12 @@ def analyze(
             # Fall back to single-stock flow for one ticker
             if profile_config is None:
                 # User just created a new profile via get_user_selections — pass selections through
-                run_analysis(checkpoint=checkpoint, selections=selections)
+                run_analysis(checkpoint=checkpoint, selections=selections, holdings=holdings)
             else:
                 # User selected an existing profile — use batch flow with a single ticker
-                run_batch_analysis([ticker_list[0]], profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name)
+                run_batch_analysis([ticker_list[0]], profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name, holdings=holdings)
         else:
-            run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name)
+            run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name, holdings=holdings)
     else:
         # Single / custom mode
         selections = get_user_selections()
@@ -1180,9 +1308,299 @@ def analyze(
                 "anthropic_effort": selections.get("anthropic_effort"),
                 "output_language": selections.get("output_language", "English"),
             }
-            run_batch_analysis(tickers, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None)
+            run_batch_analysis(tickers, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, holdings=holdings)
         else:
-            run_analysis(checkpoint=checkpoint, selections=selections)
+            run_analysis(checkpoint=checkpoint, selections=selections, holdings=holdings)
+
+
+def _do_sync_holdings(sheet_id: Optional[str], worksheet: str):
+    """Core sync logic shared by sync-holdings and sh commands."""
+    from tradingagents.portfolio import PortfolioRepository, PortfolioSyncService
+
+    _sheet_id = sheet_id or DEFAULT_CONFIG.get("portfolio", {}).get("sheet_id")
+    if not _sheet_id:
+        console.print(
+            "[red]No sheet ID configured. Use --sheet-id or set "
+            "PORTFOLIO_SHEET_ID in .env[/red]"
+        )
+        raise typer.Exit(1)
+
+    _worksheet = worksheet or DEFAULT_CONFIG.get("portfolio", {}).get("worksheet", "total")
+
+    try:
+        sync_service = PortfolioSyncService(sheet_id=_sheet_id, worksheet=_worksheet)
+        portfolio = sync_service.sync()
+
+        repo = PortfolioRepository()
+        repo.save(portfolio)
+
+        console.print(f"[green]✓ Synced {len(portfolio.holdings)} holdings[/green]")
+        console.print(f"  Local cache: [dim]{repo.path}[/dim]")
+        console.print(f"  Updated at:  [dim]{portfolio.metadata.updated_at}[/dim]")
+
+        # Show summary table
+        from rich.table import Table
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Ticker", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Shares", justify="right")
+        table.add_column("Avg Cost", justify="right")
+        table.add_column("P&L%", justify="right")
+
+        for ticker, h in sorted(portfolio.holdings.items()):
+            pnl_str = "N/A"
+            pnl_style = "white"
+            if h.pnl_pct is not None:
+                sign = "+" if h.pnl_pct >= 0 else ""
+                pnl_str = f"{sign}{h.pnl_pct * 100:.2f}%"
+                pnl_style = "red" if h.pnl_pct >= 0 else "green"
+            table.add_row(
+                ticker,
+                h.name or "—",
+                f"{h.shares:,.0f}",
+                f"{h.avg_cost:.3f}",
+                pnl_str,
+                style=pnl_style,
+            )
+        console.print(table)
+
+        if portfolio.summary:
+            console.print(
+                f"\n[bold]Summary:[/bold] {portfolio.summary.get('total_holdings', 0)} holdings, "
+                f"invested {_format_money(portfolio.summary.get('total_invested', 0))}, "
+                f"value {_format_money(portfolio.summary.get('total_market_value', 0))}"
+            )
+    except Exception as exc:
+        console.print(f"[red]Sync failed: {exc}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command(name="sync-holdings")
+def sync_holdings_command(
+    sheet_id: Optional[str] = typer.Option(
+        None,
+        "--sheet-id",
+        help="Google Sheet ID (defaults to portfolio.sheet_id in config).",
+    ),
+    worksheet: str = typer.Option(
+        "total",
+        "--worksheet",
+        help="Worksheet/tab name inside the Google Sheet.",
+    ),
+):
+    """Sync holdings from Google Sheet to local JSON cache."""
+    _do_sync_holdings(sheet_id, worksheet)
+
+
+@app.command(name="sh")
+def sync_holdings_short_command(
+    sheet_id: Optional[str] = typer.Option(
+        None,
+        "--sheet-id",
+        help="Google Sheet ID (defaults to portfolio.sheet_id in config).",
+    ),
+    worksheet: str = typer.Option(
+        "total",
+        "--worksheet",
+        help="Worksheet/tab name inside the Google Sheet.",
+    ),
+):
+    """Shortcut for sync-holdings."""
+    _do_sync_holdings(sheet_id, worksheet)
+
+
+def _do_sync_transactions(sheet_id: Optional[str], worksheet: str):
+    """Core sync logic for transaction history."""
+    from tradingagents.portfolio import (
+        PortfolioRepository,
+        TransactionSyncService,
+        Portfolio,
+    )
+
+    _sheet_id = sheet_id or DEFAULT_CONFIG.get("portfolio", {}).get("transaction_sheet_id")
+    if not _sheet_id:
+        console.print(
+            "[red]No transaction sheet ID configured. Use --sheet-id or set "
+            "TRANSACTION_SHEET_ID in .env[/red]"
+        )
+        raise typer.Exit(1)
+
+    _worksheet = worksheet or DEFAULT_CONFIG.get("portfolio", {}).get(
+        "transaction_worksheet", "stock transitions"
+    )
+
+    try:
+        sync_service = TransactionSyncService(sheet_id=_sheet_id, worksheet=_worksheet)
+        transactions = sync_service.sync()
+
+        repo = PortfolioRepository()
+        if repo.exists():
+            portfolio = repo.load()
+        else:
+            portfolio = Portfolio()
+
+        portfolio.transactions = transactions
+        repo.save(portfolio)
+
+        console.print(f"[green]✓ Synced {len(transactions)} transactions[/green]")
+        console.print(f"  Local cache: [dim]{repo.path}[/dim]")
+    except Exception as exc:
+        console.print(f"[red]Sync failed: {exc}[/red]")
+        raise typer.Exit(1)
+
+
+@app.command(name="sync-transactions")
+def sync_transactions_command(
+    sheet_id: Optional[str] = typer.Option(
+        None,
+        "--sheet-id",
+        help="Google Sheet ID for transaction history (defaults to config).",
+    ),
+    worksheet: str = typer.Option(
+        "stock transitions",
+        "--worksheet",
+        help="Worksheet/tab name for transaction history.",
+    ),
+):
+    """Sync transaction history from Google Sheet to local JSON cache."""
+    _do_sync_transactions(sheet_id, worksheet)
+
+
+@app.command(name="st")
+def sync_transactions_short_command(
+    sheet_id: Optional[str] = typer.Option(
+        None,
+        "--sheet-id",
+        help="Google Sheet ID for transaction history (defaults to config).",
+    ),
+    worksheet: str = typer.Option(
+        "stock transitions",
+        "--worksheet",
+        help="Worksheet/tab name for transaction history.",
+    ),
+):
+    """Shortcut for sync-transactions."""
+    _do_sync_transactions(sheet_id, worksheet)
+
+
+@app.command(name="show-holdings")
+def show_holdings_command(
+    history: bool = typer.Option(
+        False,
+        "--history",
+        help="Show recent transaction history for each holding.",
+    ),
+):
+    """Display holdings from local cache (no network call)."""
+    from tradingagents.portfolio import PortfolioRepository
+
+    repo = PortfolioRepository()
+    if not repo.exists():
+        console.print(
+            "[yellow]No local holdings found. Run 'uv run tradingagents sync-holdings' first.[/yellow]"
+        )
+        raise typer.Exit(1)
+
+    try:
+        portfolio = repo.load()
+        console.print(f"[green] Holdings from local cache[/green] ([dim]{repo.path}[/dim])")
+        console.print(f"  Last updated: [dim]{portfolio.metadata.updated_at or 'unknown'}[/dim]\n")
+
+        from rich.table import Table
+        from rich.text import Text
+        table = Table(show_header=True, header_style="bold magenta")
+        table.add_column("Ticker", style="cyan")
+        table.add_column("Name", style="green")
+        table.add_column("Shares", justify="right")
+        table.add_column("Avg Cost", justify="right")
+        table.add_column("Market", justify="right")
+        table.add_column("P&L%", justify="right")
+        table.add_column("Weight", justify="right")
+
+        for ticker, h in sorted(portfolio.holdings.items()):
+            pnl_text = Text("N/A")
+            if h.pnl_pct is not None:
+                sign = "+" if h.pnl_pct >= 0 else ""
+                pnl_str = f"{sign}{h.pnl_pct * 100:.2f}%"
+                pnl_color = "red" if h.pnl_pct >= 0 else "green"
+                pnl_text = Text(pnl_str, style=pnl_color)
+            weight_str = "N/A"
+            if h.weight is not None:
+                weight_str = f"{h.weight * 100:.2f}%"
+            table.add_row(
+                ticker,
+                h.name or "—",
+                f"{h.shares:,.0f}",
+                f"{h.avg_cost:.3f}",
+                f"{h.market_price:.3f}" if h.market_price else "N/A",
+                pnl_text,
+                weight_str,
+            )
+        console.print(table)
+
+        if history and portfolio.transactions:
+            console.print("\n[bold]近期交易记录[/bold] (各标的最近 10 笔)")
+            # Normalise ticker for cross-source matching (holdings may have
+            # .SS/.SZ/.BJ suffix while transaction sheet stores bare codes).
+            def _normalise_tx_ticker(tx_ticker: str) -> str:
+                return tx_ticker.split(".")[0] if "." in tx_ticker else tx_ticker
+
+            for ticker, h in sorted(portfolio.holdings.items()):
+                ticker_base = _normalise_tx_ticker(ticker)
+                txs = [
+                    t for t in portfolio.transactions
+                    if _normalise_tx_ticker(t.ticker) == ticker_base
+                ]
+                if not txs:
+                    continue
+                txs_sorted = sorted(txs, key=lambda t: t.date, reverse=True)
+                total = len(txs_sorted)
+                showing = min(total, 10)
+                omitted = f"  [dim]... 还有 {total - showing} 笔 ...[/dim]" if total > 10 else ""
+                console.print(f"\n[cyan]{ticker}[/cyan] {h.name or ''}  [dim]({total} 笔)[/dim]")
+                for t in txs_sorted[:10]:
+                    fee_str = f" 手续费 {t.fee:.2f}" if t.fee else ""
+                    tag_str = f" [{t.tag}]" if t.tag else ""
+                    console.print(
+                        f"  [dim]{t.date}[/dim] {t.action} {abs(t.shares):,.0f} 股 "
+                        f"@ {t.price:.3f}{fee_str}{tag_str}"
+                    )
+                if omitted:
+                    console.print(omitted)
+    except Exception as exc:
+        console.print(f"[red]Failed to load holdings: {exc}[/red]")
+        raise typer.Exit(1)
+
+
+def _format_money(value: float) -> str:
+    """Format a monetary value with Chinese-friendly units."""
+    if value is None:
+        return "N/A"
+    abs_v = abs(value)
+    if abs_v >= 1e8:
+        return f"{value / 1e8:.2f}亿"
+    if abs_v >= 1e4:
+        return f"{value / 1e4:.2f}万"
+    return f"{value:,.2f}"
+
+
+@app.callback(invoke_without_command=True)
+def default(ctx: typer.Context):
+    """Default to interactive analyze mode when no subcommand is given."""
+    if ctx.invoked_subcommand is None:
+        # Typer Option defaults are OptionInfo objects; we must pass real
+        # Python values when calling the command function directly.
+        analyze(
+            checkpoint=True,
+            clear_checkpoints=False,
+            profile=None,
+            watchlist=None,
+            tickers=None,
+            output_dir=None,
+            holdings_sheet=None,
+            holdings_worksheet="total",
+            sync_holdings=False,
+        )
 
 
 if __name__ == "__main__":
