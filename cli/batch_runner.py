@@ -57,7 +57,43 @@ class BatchRunner:
         update_batch_display(self._layout, self.dashboard, elapsed=elapsed)
 
     def _is_already_completed(self, ticker: str) -> bool:
-        return (self.output_dir / ticker / "complete_report.md").exists()
+        """Check if ticker was already analysed today.
+
+        Scans the current output directory *and* all historical batch_* folders
+        under the same ``reports/`` root, because each run creates a new
+        timestamped directory.
+        """
+        today = datetime.now().date()
+
+        # Candidate folder names: raw ticker + resolved suffix variants
+        candidates = {ticker}
+        try:
+            from tradingagents.ticker_resolver import resolve_ticker
+            resolved = resolve_ticker(ticker)
+            candidates.add(resolved["ticker"])
+        except Exception:
+            pass
+
+        def _is_fresh(path: Path) -> bool:
+            if not path.exists():
+                return False
+            mtime = datetime.fromtimestamp(path.stat().st_mtime)
+            return mtime.date() == today
+
+        # 1. Check current batch directory
+        for cand in candidates:
+            if _is_fresh(self.output_dir / cand / "complete_report.md"):
+                return True
+
+        # 2. Check historical batch_* directories
+        reports_dir = self.output_dir.parent
+        if reports_dir.exists():
+            for batch_dir in reports_dir.glob("batch_*"):
+                for cand in candidates:
+                    if _is_fresh(batch_dir / cand / "complete_report.md"):
+                        return True
+
+        return False
 
     def _build_config(self) -> dict:
         config = DEFAULT_CONFIG.copy()
