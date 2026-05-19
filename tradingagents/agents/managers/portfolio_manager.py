@@ -39,6 +39,23 @@ def create_portfolio_manager(llm):
             else ""
         )
 
+        holdings_context = state.get("holdings_context", {})
+        transactions_context = state.get("transactions_context", [])
+        holdings_line = ""
+        if holdings_context:
+            from tradingagents.portfolio import Portfolio, Holding, Transaction, build_pm_prompt
+            portfolio = Portfolio(
+                holdings={
+                    t: Holding.from_dict(d, ticker=t) for t, d in holdings_context.items()
+                }
+            )
+            transactions = [Transaction.from_dict(t) for t in transactions_context]
+            holdings_prompt = build_pm_prompt(
+                state["company_of_interest"], portfolio, transactions
+            )
+            if holdings_prompt:
+                holdings_line = f"\n**Current Position:**\n{holdings_prompt}\n"
+
         prompt = f"""As the Portfolio Manager, synthesize the risk analysts' debate and deliver the final trading decision.
 
 {instrument_context}
@@ -55,7 +72,7 @@ def create_portfolio_manager(llm):
 **Context:**
 - Research Manager's investment plan: **{research_plan}**
 - Trader's transaction proposal: **{trader_plan}**
-{lessons_line}
+{lessons_line}{holdings_line}
 **Risk Analysts Debate History:**
 {history}
 
