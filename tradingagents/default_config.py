@@ -11,16 +11,12 @@ DEFAULT_CONFIG = {
     # the oldest resolved entries are pruned once this limit is exceeded.
     # Pending entries are never pruned. None disables rotation entirely.
     "memory_log_max_entries": None,
-    # LLM settings
-    "llm_provider": "openai",
-    "deep_think_llm": "gpt-5.4",
-    "quick_think_llm": "gpt-5.4-mini",
-    # When None, each provider's client falls back to its own default endpoint
-    # (api.openai.com for OpenAI, generativelanguage.googleapis.com for Gemini, ...).
-    # The CLI overrides this per provider when the user picks one. Keeping a
-    # provider-specific URL here would leak (e.g. OpenAI's /v1 was previously
-    # being forwarded to Gemini, producing malformed request URLs).
-    "backend_url": None,
+    # LLM settings (defaults aligned with personal usage: SenseNova + DeepSeek)
+    "llm_provider": "sensenova",
+    "deep_think_llm": "DeepSeek-R1",
+    "quick_think_llm": "DeepSeek-V3-1",
+    # SenseNova compatible-mode endpoint
+    "backend_url": "https://api.sensenova.cn/compatible-mode/v2",
     # Provider-specific thinking configuration
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
@@ -30,23 +26,33 @@ DEFAULT_CONFIG = {
     "checkpoint_enabled": False,
     # Output language for analyst reports and final decision
     # Internal agent debate stays in English for reasoning quality
-    "output_language": "English",
+    "output_language": "Chinese",
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
     "max_recur_limit": 200,
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
-    # Note: A-share tickers (.SS/.SZ/.BJ) auto-route to akshare regardless of
-    # the value here — see tradingagents/dataflows/interface.py:route_to_vendor.
+    # Note: A-share tickers (.SS/.SZ/.BJ) auto-route to smartmoney_db first,
+    # then akshare, regardless of the value here.
     "data_vendors": {
-        "core_stock_apis": "yfinance",       # Options: alpha_vantage, yfinance
-        "technical_indicators": "yfinance",  # Options: alpha_vantage, yfinance
-        "fundamental_data": "yfinance",      # Options: alpha_vantage, yfinance
-        "news_data": "yfinance",             # Options: alpha_vantage, yfinance
+        "core_stock_apis": "smartmoney_db,akshare,yfinance",
+        "technical_indicators": "smartmoney_db,akshare,yfinance",
+        "fundamental_data": "smartmoney_db,akshare,yfinance",
+        "news_data": "akshare,yfinance",  # news not stored locally
     },
     # Tool-level configuration (takes precedence over category-level)
     "tool_vendors": {
         # Example: "get_stock_data": "alpha_vantage",  # Override category default
+    },
+    # Portfolio / holdings configuration
+    "portfolio": {
+        "data_path": os.path.expanduser("~/Code/data/quant_data/tradingagents_portfolio.json"),
+        "sheet_id": os.getenv("PORTFOLIO_SHEET_ID"),  # Default Google Sheet ID
+        "worksheet": "total",    # Default worksheet/tab name
+        "auto_sync": False,      # Auto-sync before analysis if local data is stale
+        "sync_stale_hours": 24,  # Consider local data stale after N hours
+        "transaction_sheet_id": os.getenv("TRANSACTION_SHEET_ID"),  # Transaction history Sheet ID
+        "transaction_worksheet": "stock transitions",  # Transaction history worksheet name
     },
 }
