@@ -10,7 +10,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from cli.batch_dashboard import BatchDashboard, create_batch_layout, update_batch_display
+from cli.batch_dashboard import BatchDashboard
+from cli.dashboard import create_dashboard_layout, update_dashboard_display, process_stream_chunk
 from cli.stats_handler import StatsCallbackHandler
 from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
@@ -43,18 +44,25 @@ class BatchRunner:
         self._layout = None
         self._start_time: Optional[float] = None
 
-    def _refresh_display(self) -> None:
+    def _refresh_display(self, stats_handler=None) -> None:
         """Push current dashboard state into the Live-managed layout.
 
-        Without this call the dashboard mutations inside _run_single's stream
-        loop never reach the screen — Live only re-renders the layout object
-        it was given, and our updates target dashboard fields, not panels.
         Safe no-op when no Live context is active.
         """
         if self._layout is None or self._start_time is None:
             return
         elapsed = time.time() - self._start_time
-        update_batch_display(self._layout, self.dashboard, elapsed=elapsed)
+        update_dashboard_display(
+            self._layout,
+            self.dashboard,
+            ticker=self.dashboard.current_ticker or "",
+            stats_handler=stats_handler,
+            start_time=self._start_time,
+            batch_completed=self.dashboard.completed,
+            batch_total=self.dashboard.total,
+            batch_failed=self.dashboard.failed,
+            profile_name=self.dashboard.profile_name,
+        )
 
     def _is_already_completed(self, ticker: str) -> bool:
         """Check if ticker was already analysed today.
@@ -116,9 +124,6 @@ class BatchRunner:
             ANALYST_ORDER,
             save_report_to_disk,
             run_translation_pipeline,
-            update_analyst_statuses,
-            update_research_team_status,
-            classify_message_type,
         )
         from tradingagents.ticker_resolver import resolve_ticker
 
@@ -131,7 +136,7 @@ class BatchRunner:
         selected_analyst_keys = [a for a in ANALYST_ORDER if a in self.profile_config.get("analysts", [])]
         if not selected_analyst_keys:
             selected_analyst_keys = ["market"]
-        self.dashboard.selected_analysts = selected_analyst_keys
+        self.dashboard.init_for_analysis(selected_analyst_keys)
 
         stats_handler = StatsCallbackHandler()
         graph = TradingAgentsGraph(
@@ -148,43 +153,19 @@ class BatchRunner:
         args = graph.propagator.get_graph_args(callbacks=[stats_handler])
 
         trace = []
+        processed_ids: set = set()
+        max_debate = config.get("max_debate_rounds", 1)
+        max_risk = config.get("max_risk_discuss_rounds", 1)
+
         for chunk in graph.graph.stream(init_state, **args):
-            for message in chunk.get("messages", []):
-                msg_type, content = classify_message_type(message)
-                if content and content.strip():
-                    self.dashboard.add_message(msg_type, content)
-                if hasattr(message, "tool_calls") and message.tool_calls:
-                    for tc in message.tool_calls:
-                        if isinstance(tc, dict):
-                            self.dashboard.add_tool_call(tc["name"], tc.get("args", {}))
-                        else:
-                            self.dashboard.add_tool_call(tc.name, tc.args)
-
-            update_analyst_statuses(self.dashboard, chunk)
-
-            if chunk.get("investment_debate_state"):
-                debate = chunk["investment_debate_state"]
-                if debate.get("bull_history", "").strip() or debate.get("bear_history", "").strip():
-                    update_research_team_status(self.dashboard, "in_progress")
-                if debate.get("judge_decision", "").strip():
-                    self.dashboard.set_agent_status("Research Manager", "completed")
-                    self.dashboard.set_agent_status("Trader", "in_progress")
-
-            if chunk.get("trader_investment_plan"):
-                self.dashboard.set_agent_status("Trader", "completed")
-                self.dashboard.set_agent_status("Aggressive Analyst", "in_progress")
-
-            if chunk.get("risk_debate_state"):
-                risk = chunk["risk_debate_state"]
-                for role in ["aggressive", "conservative", "neutral"]:
-                    hist = risk.get(f"{role}_history", "").strip()
-                    if hist:
-                        self.dashboard.set_agent_status(f"{role.title()} Analyst", "completed")
-                judge = risk.get("judge_decision", "").strip()
-                if judge:
-                    self.dashboard.set_agent_status("Portfolio Manager", "completed")
-
-            self._refresh_display()
+            processed_ids = process_stream_chunk(
+                self.dashboard,
+                chunk,
+                max_debate_rounds=max_debate,
+                max_risk_rounds=max_risk,
+                processed_ids=processed_ids,
+            )
+            self._refresh_display(stats_handler=stats_handler)
             trace.append(chunk)
 
         final_state = trace[-1] if trace else {}
@@ -222,7 +203,7 @@ class BatchRunner:
 
     def run(self) -> None:
         """Run the full batch."""
-        layout = create_batch_layout()
+        layout = create_dashboard_layout()
         start_time = time.time()
         self.dashboard.update_progress(self.tickers[0] if self.tickers else None, 0, 0)
 
@@ -232,7 +213,16 @@ class BatchRunner:
         with Live(layout, refresh_per_second=4) as live:
             # Push an initial frame so the user sees something other than empty
             # panels for the few seconds before the first node fires.
-            update_batch_display(layout, self.dashboard, elapsed=0.0)
+            update_dashboard_display(
+                layout,
+                self.dashboard,
+                ticker=self.dashboard.current_ticker or "",
+                start_time=start_time,
+                batch_completed=0,
+                batch_total=self.dashboard.total,
+                batch_failed=0,
+                profile_name=self.dashboard.profile_name,
+            )
 
             for idx, ticker in enumerate(self.tickers):
                 if self._is_already_completed(ticker):
@@ -241,8 +231,17 @@ class BatchRunner:
 
                 self.dashboard.reset_for_next_stock()
                 self.dashboard.update_progress(ticker, len(self.completed_tickers), len(self.failures))
-                self.dashboard.set_agent_status("Market Analyst", "in_progress")
-                update_batch_display(layout, self.dashboard, elapsed=time.time() - start_time)
+                self.dashboard.update_agent_status("Market Analyst", "in_progress")
+                update_dashboard_display(
+                    layout,
+                    self.dashboard,
+                    ticker=ticker,
+                    start_time=start_time,
+                    batch_completed=len(self.completed_tickers),
+                    batch_total=self.dashboard.total,
+                    batch_failed=len(self.failures),
+                    profile_name=self.dashboard.profile_name,
+                )
 
                 try:
                     self._run_single(ticker)
@@ -257,7 +256,16 @@ class BatchRunner:
                         f.write(f"{ticker}: {e}\n")
 
                 self.dashboard.update_progress(ticker, len(self.completed_tickers) - len(self.failures), len(self.failures))
-                update_batch_display(layout, self.dashboard, elapsed=time.time() - start_time)
+                update_dashboard_display(
+                    layout,
+                    self.dashboard,
+                    ticker=ticker,
+                    start_time=start_time,
+                    batch_completed=self.dashboard.completed,
+                    batch_total=self.dashboard.total,
+                    batch_failed=self.dashboard.failed,
+                    profile_name=self.dashboard.profile_name,
+                )
 
         # Live closed — release the layout reference so any stray _refresh_display
         # call from finalization code becomes a no-op instead of writing to a dead layout.
