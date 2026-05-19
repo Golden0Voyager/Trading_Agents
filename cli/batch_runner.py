@@ -30,11 +30,13 @@ class BatchRunner:
         profile_config: dict,
         output_dir: Path,
         checkpoint: bool = False,
+        holdings: dict | None = None,
     ):
         self.tickers = tickers
         self.profile_config = profile_config
         self.output_dir = Path(output_dir)
         self.checkpoint = checkpoint
+        self.holdings = self._resolve_holdings(holdings)
         self.completed_tickers: set[str] = set()
         self.failures: dict[str, str] = {}
         self.summaries: dict[str, dict] = {}
@@ -64,14 +66,53 @@ class BatchRunner:
             profile_name=self.dashboard.profile_name,
         )
 
+    @staticmethod
+    def _resolve_holdings(holdings: dict | None) -> dict:
+        """Return provided holdings, or load from local cache if None."""
+        if holdings is not None:
+            return holdings
+        try:
+            from tradingagents.portfolio import PortfolioRepository
+            repo = PortfolioRepository()
+            if repo.exists():
+                portfolio = repo.load()
+                return {
+                    ticker: {
+                        "shares": h.shares,
+                        "avg_cost": h.avg_cost,
+                        "market_price": h.market_price,
+                        "pnl_pct": h.pnl_pct,
+                        "weight": h.weight,
+                        "grid_strategy": h.grid_strategy,
+                        "name": h.name,
+                    }
+                    for ticker, h in portfolio.holdings.items()
+                }
+        except Exception:
+            pass
+        return {}
+
+    @staticmethod
+    def _parse_report_analysis_date(path: Path) -> str | None:
+        """Parse the Analysis Date line from a complete_report.md header."""
+        try:
+            text = path.read_text(encoding="utf-8")
+            for line in text.splitlines()[:30]:
+                if line.startswith("Analysis Date:"):
+                    return line.split(":", 1)[1].strip()
+        except Exception:
+            pass
+        return None
+
     def _is_already_completed(self, ticker: str) -> bool:
-        """Check if ticker was already analysed today.
+        """Check if ticker was already analysed for the target date.
 
         Scans the current output directory *and* all historical batch_* folders
-        under the same ``reports/`` root, because each run creates a new
-        timestamped directory.
+        under the same ``reports/`` root.  A report is considered a match only
+        when its embedded ``Analysis Date`` equals the configured
+        ``analysis_date`` (falls back to today for legacy reports).
         """
-        today = datetime.now().date()
+        target_date = self.profile_config.get("analysis_date") or datetime.now().strftime("%Y-%m-%d")
 
         # Candidate folder names: raw ticker + resolved suffix variants
         candidates = {ticker}
@@ -82,15 +123,19 @@ class BatchRunner:
         except Exception:
             pass
 
-        def _is_fresh(path: Path) -> bool:
-            if not path.exists():
+        def _has_matching_report(path: Path) -> bool:
+            if not path.exists() or path.stat().st_size == 0:
                 return False
+            report_date = self._parse_report_analysis_date(path)
+            if report_date:
+                return report_date == target_date
+            # Fallback for legacy reports without Analysis Date line
             mtime = datetime.fromtimestamp(path.stat().st_mtime)
-            return mtime.date() == today
+            return mtime.date() == datetime.now().date()
 
         # 1. Check current batch directory
         for cand in candidates:
-            if _is_fresh(self.output_dir / cand / "complete_report.md"):
+            if _has_matching_report(self.output_dir / cand / "complete_report.md"):
                 return True
 
         # 2. Check historical batch_* directories
@@ -98,7 +143,7 @@ class BatchRunner:
         if reports_dir.exists():
             for batch_dir in reports_dir.glob("batch_*"):
                 for cand in candidates:
-                    if _is_fresh(batch_dir / cand / "complete_report.md"):
+                    if _has_matching_report(batch_dir / cand / "complete_report.md"):
                         return True
 
         return False
@@ -107,8 +152,16 @@ class BatchRunner:
         config = DEFAULT_CONFIG.copy()
         config["max_debate_rounds"] = self.profile_config.get("research_depth", 1)
         config["max_risk_discuss_rounds"] = self.profile_config.get("research_depth", 1)
-        config["quick_think_llm"] = self.profile_config.get("shallow_thinker")
-        config["deep_think_llm"] = self.profile_config.get("deep_thinker")
+        config["quick_think_llm"] = (
+            self.profile_config.get("shallow_thinker")
+            or self.profile_config.get("quick_think_llm")
+            or config["quick_think_llm"]
+        )
+        config["deep_think_llm"] = (
+            self.profile_config.get("deep_thinker")
+            or self.profile_config.get("deep_think_llm")
+            or config["deep_think_llm"]
+        )
         config["backend_url"] = self.profile_config.get("backend_url")
         config["llm_provider"] = self.profile_config.get("llm_provider", "openai").lower()
         config["google_thinking_level"] = self.profile_config.get("google_thinking_level")
@@ -147,7 +200,24 @@ class BatchRunner:
         )
 
         trade_date = self.profile_config.get("analysis_date") or datetime.now().strftime("%Y-%m-%d")
-        init_state = graph.propagator.create_initial_state(resolved_ticker, trade_date)
+
+        # Load transaction history for injection
+        transactions_context: list[dict] = []
+        try:
+            from tradingagents.portfolio import PortfolioRepository
+            repo = PortfolioRepository()
+            if repo.exists():
+                portfolio = repo.load()
+                transactions_context = [t.to_dict() for t in portfolio.transactions]
+        except Exception:
+            pass
+
+        init_state = graph.propagator.create_initial_state(
+            resolved_ticker,
+            trade_date,
+            holdings_context=self.holdings,
+            transactions_context=transactions_context,
+        )
         if company_name:
             init_state["company_name"] = company_name
         args = graph.propagator.get_graph_args(callbacks=[stats_handler])
