@@ -16,9 +16,24 @@ def create_conservative_debator(llm):
 
         trader_decision = state["trader_investment_plan"]
 
+        holdings_context = state.get("holdings_context", {})
+        transactions_context = state.get("transactions_context", [])
+        holdings_line = ""
+        if holdings_context:
+            from tradingagents.portfolio import Portfolio, Holding, Transaction, build_risk_prompt
+            portfolio = Portfolio(
+                holdings={t: Holding.from_dict(d, ticker=t) for t, d in holdings_context.items()}
+            )
+            transactions = [Transaction.from_dict(t) for t in transactions_context]
+            risk_prompt = build_risk_prompt(
+                state["company_of_interest"], portfolio, transactions
+            )
+            if risk_prompt:
+                holdings_line = f"\n{risk_prompt}\n"
+
         prompt = f"""As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
 
-{trader_decision}
+{trader_decision}{holdings_line}
 
 Your task is to actively counter the arguments of the Aggressive and Neutral Analysts, highlighting where their views may overlook potential threats or fail to prioritize sustainability. Respond directly to their points, drawing from the following data sources to build a convincing case for a low-risk approach adjustment to the trader's decision:
 
