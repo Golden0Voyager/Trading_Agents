@@ -620,19 +620,15 @@ def get_industry_valuation(symbol: str) -> str:
     code = to_akshare_symbol(symbol, "bare")
 
     with _akshare_task_context(f"🏭 {symbol} 行业估值"), no_proxy():
-        pe_df = _safe_call(ak.stock_a_pe)
         info_df = _safe_call(ak.stock_individual_info_em, symbol=code)
+        spot_df = _safe_call(ak.stock_zh_a_spot_em)
+        value_df = _safe_call(ak.stock_value_em, symbol=code)
 
-    if pe_df is None or pe_df.empty:
-        return f"No industry valuation data available for {symbol} via akshare."
+    if info_df is None or info_df.empty:
+        return f"No individual info data available for {symbol} via akshare."
 
-    # Locate target stock
-    target_rows = pe_df[pe_df["股票代码"].astype(str).str.strip() == code]
-    if target_rows.empty:
-        return f"Stock {symbol} not found in valuation database."
-
-    target = target_rows.iloc[0]
-    industry = target.get("所处行业", "")
+    info = dict(zip(info_df["item"], info_df["value"]))
+    industry = info.get("行业", "")
 
     lines = [
         f"## {symbol.upper()} Industry Valuation Comparison (source: akshare / Eastmoney)",
@@ -642,46 +638,48 @@ def get_industry_valuation(symbol: str) -> str:
     # Target stock metrics
     lines.append(f"### {symbol.upper()} Current Valuation")
     lines.append(f"- Industry: {industry or 'N/A'}")
-    lines.append(f"- Latest Price: {target.get('最新价', 'N/A')}")
-    lines.append(f"- PE (Dynamic): {target.get('市盈率-动态', 'N/A')}")
-    lines.append(f"- PE (TTM): {target.get('市盈率-TTM', 'N/A')}")
-    lines.append(f"- PE (Static): {target.get('市盈率-静态', 'N/A')}")
-    lines.append(f"- PB: {target.get('市净率', 'N/A')}")
+
+    target_pe_dyn = None
+    target_pb = None
+    if spot_df is not None and not spot_df.empty:
+        target_rows = spot_df[spot_df["代码"].astype(str).str.strip() == code]
+        if not target_rows.empty:
+            target = target_rows.iloc[0]
+            lines.append(f"- Latest Price: {target.get('最新价', 'N/A')}")
+            lines.append(f"- PE (Dynamic): {target.get('市盈率-动态', 'N/A')}")
+            lines.append(f"- PB: {target.get('市净率', 'N/A')}")
+            target_pe_dyn = safe_float(target.get("市盈率-动态"))
+            target_pb = safe_float(target.get("市净率"))
+
+    if value_df is not None and not value_df.empty:
+        latest = value_df.iloc[-1]
+        lines.append(f"- PE (TTM): {latest.get('PE(TTM)', 'N/A')}")
+        lines.append(f"- PE (Static): {latest.get('PE(静)', 'N/A')}")
+        lines.append(f"- PEG: {latest.get('PEG值', 'N/A')}")
+
     lines.append("")
 
-    # Industry comparison
-    if industry:
-        industry_pe = pe_df[pe_df["所处行业"] == industry]
-        if not industry_pe.empty:
-            pe_dyn = pd.to_numeric(industry_pe["市盈率-动态"], errors="coerce").dropna()
-            pe_ttm = pd.to_numeric(industry_pe["市盈率-TTM"], errors="coerce").dropna()
-            pb = pd.to_numeric(industry_pe["市净率"], errors="coerce").dropna()
+    # Market-wide comparison
+    if spot_df is not None and not spot_df.empty:
+        pe_dyn = pd.to_numeric(spot_df["市盈率-动态"], errors="coerce").dropna()
+        pb = pd.to_numeric(spot_df["市净率"], errors="coerce").dropna()
 
-            lines.append(f"### Industry Comparison ({industry})")
-            lines.append(f"- Industry Sample Size: {len(industry_pe)} stocks")
+        lines.append("### Market-Wide Comparison (All A-Shares)")
+        lines.append(f"- Market Sample Size: {len(spot_df)} stocks")
 
-            if not pe_dyn.empty:
-                target_pe = safe_float(target.get("市盈率-动态"))
-                lines.append(f"- PE (Dynamic) Industry Median: {pe_dyn.median():.2f}")
-                lines.append(f"- PE (Dynamic) Industry Mean: {pe_dyn.mean():.2f}")
-                if target_pe is not None:
-                    pct = (pe_dyn < target_pe).mean() * 100
-                    lines.append(f"- {symbol.upper()} PE Rank: {pct:.1f}% of peers have lower PE (higher = more expensive)")
+        if not pe_dyn.empty:
+            lines.append(f"- PE (Dynamic) Market Median: {pe_dyn.median():.2f}")
+            lines.append(f"- PE (Dynamic) Market Mean: {pe_dyn.mean():.2f}")
+            if target_pe_dyn is not None:
+                pct = (pe_dyn < target_pe_dyn).mean() * 100
+                lines.append(f"- {symbol.upper()} PE Rank: {pct:.1f}% of all A-shares have lower PE")
 
-            if not pe_ttm.empty:
-                target_pe_ttm = safe_float(target.get("市盈率-TTM"))
-                lines.append(f"- PE (TTM) Industry Median: {pe_ttm.median():.2f}")
-                if target_pe_ttm is not None:
-                    pct = (pe_ttm < target_pe_ttm).mean() * 100
-                    lines.append(f"- {symbol.upper()} PE-TTM Rank: {pct:.1f}% of peers have lower PE-TTM")
-
-            if not pb.empty:
-                target_pb = safe_float(target.get("市净率"))
-                lines.append(f"- PB Industry Median: {pb.median():.2f}")
-                if target_pb is not None:
-                    pct = (pb < target_pb).mean() * 100
-                    lines.append(f"- {symbol.upper()} PB Rank: {pct:.1f}% of peers have lower PB")
-            lines.append("")
+        if not pb.empty:
+            lines.append(f"- PB Market Median: {pb.median():.2f}")
+            if target_pb is not None:
+                pct = (pb < target_pb).mean() * 100
+                lines.append(f"- {symbol.upper()} PB Rank: {pct:.1f}% of all A-shares have lower PB")
+        lines.append("")
 
     return "\n".join(lines)
 
