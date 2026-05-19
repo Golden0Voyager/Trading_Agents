@@ -1,0 +1,464 @@
+"""SmartMoney DB vendor — read A-share data from local SQLite database.
+
+This vendor provides a zero-latency fallback layer for A-share tickers by
+reading from the shared quant_core.db maintained by smartmoney_hunter.
+
+Placement in the fallback chain:
+    quant_core.db → akshare → yfinance
+
+If quant_core.db has no data for a symbol, ``route_to_vendor`` automatically
+falls back to the next vendor in the chain.
+"""
+from __future__ import annotations
+
+import logging
+import os
+import sqlite3
+from datetime import datetime
+from typing import Annotated
+
+import pandas as pd
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Shared database path (centralised in ~/Code/data/quant_data/)
+# ---------------------------------------------------------------------------
+DEFAULT_DB_PATH = os.path.expanduser("~/Code/data/quant_data/quant_core.db")
+_DB_PATH = os.getenv("QUANT_DB_PATH", DEFAULT_DB_PATH)
+
+
+def _to_smartmoney_symbol(symbol: str) -> str:
+    """Convert TradingAgents ticker format to quant_core.db ts_code format.
+
+    quant_core.db stores tickers as bare numeric codes (e.g. 600519, 000001)
+    without exchange suffixes.
+
+    Examples:
+        600519.SS  → 600519
+        300454.SZ  → 300454
+        000001.SZ  → 000001
+        688981.SS  → 688981
+    """
+    # Strip any exchange suffix (.SS, .SZ, .BJ, .SH)
+    bare = symbol.split(".")[0]
+    return bare
+
+
+def _get_connection():
+    """Open a read-only SQLite connection to quant_core.db."""
+    if not os.path.exists(_DB_PATH):
+        raise FileNotFoundError(f"quant_core.db not found at {_DB_PATH}")
+    return sqlite3.connect(_DB_PATH)
+
+
+def _df_from_sql(query: str, params: tuple = ()) -> pd.DataFrame | None:
+    """Execute SQL and return a DataFrame, or None on any error."""
+    try:
+        with _get_connection() as conn:
+            return pd.read_sql_query(query, conn, params=params)
+    except Exception as exc:
+        logger.debug("quant_core.db query failed: %s", exc)
+        return None
+
+
+# ===========================================================================
+# Core stock APIs
+# ===========================================================================
+
+def get_stock_data(
+    symbol: Annotated[str, "A-share ticker e.g. 600519.SS"],
+    start_date: Annotated[str, "Start date YYYY-MM-DD"],
+    end_date: Annotated[str, "End date YYYY-MM-DD"],
+) -> str:
+    """Fetch A-share daily OHLCV from local quant_core.db (forward-adjusted)."""
+    code = _to_smartmoney_symbol(symbol)
+
+    df = _df_from_sql(
+        """
+        SELECT trade_date AS Date, open AS Open, high AS High,
+               low AS Low, close AS Close, volume AS Volume
+        FROM daily_bars
+        WHERE ts_code = ? AND trade_date BETWEEN ? AND ?
+        ORDER BY trade_date DESC
+        """,
+        (code, start_date, end_date),
+    )
+
+    if df is None or df.empty:
+        raise RuntimeError(
+            f"No data in quant_core.db for {symbol} between {start_date} and {end_date}"
+        )
+
+    df = df.set_index("Date")
+    for col in ("Open", "High", "Low", "Close"):
+        df[col] = df[col].round(2)
+
+    header = (
+        f"# Stock data for {symbol.upper()} from {start_date} to {end_date}\n"
+        f"# Total records: {len(df)}\n"
+        f"# Source: quant_core.db (local SQLite, 前复权)\n"
+        f"# Data retrieved on: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
+    )
+    return header + df.to_csv()
+
+
+# ===========================================================================
+# Technical indicators
+# ===========================================================================
+
+def get_indicators(
+    symbol: Annotated[str, "A-share ticker"],
+    indicator: Annotated[str, "stockstats indicator name e.g. rsi_14, macd"],
+    curr_date: Annotated[str, "Current date YYYY-MM-DD"],
+    look_back_days: Annotated[int, "How many trading days to report"],
+) -> str:
+    """Read pre-computed indicators from quant_core.db.
+
+    Supports indicators stored in the ``indicators`` table:
+        ma5, ma10, ma20, ma60, vol_ma5, vol_ma50, vol_ma60,
+        boll_upper, boll_mid, boll_lower, boll_bandwidth, cyc60,
+        chip_concentration, macd_dif, macd_dea, macd_hist,
+        kdj_k, kdj_d, kdj_j, rsi6, rsi12, rsi24, cci
+
+    For indicators not stored locally (e.g. rsi_14), this raises
+    ``RuntimeError`` so ``route_to_vendor`` falls back to akshare.
+    """
+    from stockstats import wrap
+
+    code = _to_smartmoney_symbol(symbol)
+
+    # Map common TradingAgents indicator names to our column names
+    _INDICATOR_MAP = {
+        "rsi_6": "rsi6",
+        "rsi_12": "rsi12",
+        "rsi_24": "rsi24",
+        "rsi_14": None,  # not pre-computed; will fall back
+        "macd": "macd_hist",
+        "macd_dif": "macd_dif",
+        "macd_dea": "macd_dea",
+        "kdj_k": "kdj_k",
+        "kdj_d": "kdj_d",
+        "kdj_j": "kdj_j",
+        "cci": "cci",
+        "close": "close",
+        "volume": "volume",
+    }
+
+    col_name = _INDICATOR_MAP.get(indicator, indicator)
+
+    # Pull enough history to compute missing indicators via stockstats
+    end = datetime.strptime(curr_date, "%Y-%m-%d")
+    start = (end - pd.Timedelta(days=look_back_days * 2 + 260)).strftime("%Y-%m-%d")
+
+    # Pull OHLCV from daily_bars + pre-computed indicators from indicators table
+    df_ohlcv = _df_from_sql(
+        """
+        SELECT trade_date AS Date, open AS Open, high AS High,
+               low AS Low, close AS Close, volume AS Volume
+        FROM daily_bars
+        WHERE ts_code = ? AND trade_date BETWEEN ? AND ?
+        ORDER BY trade_date
+        """,
+        (code, start, curr_date),
+    )
+
+    df_ind = _df_from_sql(
+        """
+        SELECT trade_date AS Date, close AS Close, volume AS Volume,
+               ma5, ma10, ma20, ma60, vol_ma5, vol_ma50, vol_ma60,
+               boll_upper, boll_mid, boll_lower, boll_bandwidth, cyc60,
+               chip_concentration, macd_dif, macd_dea, macd_hist,
+               kdj_k, kdj_d, kdj_j, rsi6, rsi12, rsi24, cci
+        FROM indicators
+        WHERE ts_code = ? AND trade_date BETWEEN ? AND ?
+        ORDER BY trade_date
+        """,
+        (code, start, curr_date),
+    )
+
+    if df_ohlcv is None or df_ohlcv.empty:
+        raise RuntimeError(f"No indicator data in quant_core.db for {symbol}")
+
+    # Use OHLCV as base; merge pre-computed indicators if available
+    df = df_ohlcv.copy()
+    df["Date"] = pd.to_datetime(df["Date"])
+
+    if df_ind is not None and not df_ind.empty:
+        df_ind["Date"] = pd.to_datetime(df_ind["Date"])
+        # Merge pre-computed columns (skip Date/Close/Volume duplicates)
+        merge_cols = [c for c in df_ind.columns if c not in ("Date", "Close", "Volume")]
+        df = df.merge(df_ind[["Date"] + merge_cols], on="Date", how="left")
+
+    # If the requested indicator is pre-computed, return it directly
+    if col_name and col_name in df.columns:
+        df = df.set_index("Date")
+        tail = df.tail(look_back_days)
+        lines = [
+            f"## {indicator} values for {symbol.upper()} "
+            f"(last {look_back_days} trading days, source: quant_core.db)\n"
+        ]
+        for idx, row in tail.iterrows():
+            v = row[col_name]
+            lines.append(f"{idx.strftime('%Y-%m-%d')}: {'N/A' if pd.isna(v) else v}")
+        return "\n".join(lines)
+
+    # Otherwise try to compute via stockstats (requires full OHLCV)
+    stats = wrap(df)
+    stats["Date"] = stats["Date"].dt.strftime("%Y-%m-%d")
+    try:
+        stats[indicator]  # trigger calculation
+    except Exception as exc:
+        raise RuntimeError(
+            f"Indicator '{indicator}' not available in quant_core.db and "
+            f"stockstats could not compute it: {exc}"
+        )
+
+    tail = stats.tail(look_back_days)
+    lines = [
+        f"## {indicator} values for {symbol.upper()} "
+        f"(last {look_back_days} trading days, source: quant_core.db + stockstats)\n"
+    ]
+    for _, row in tail.iterrows():
+        v = row[indicator]
+        lines.append(f"{row['Date']}: {'N/A' if pd.isna(v) else v}")
+    return "\n".join(lines)
+
+
+# ===========================================================================
+# Fundamental data
+# ===========================================================================
+
+def get_fundamentals(
+    symbol: Annotated[str, "A-share ticker"],
+    curr_date: Annotated[str, "Current date YYYY-MM-DD"],
+) -> str:
+    """Read fundamentals from quant_core.db (PE, PB, ROE, etc.)."""
+    code = _to_smartmoney_symbol(symbol)
+
+    # Get company name from stock_list
+    name_df = _df_from_sql(
+        "SELECT name, industry FROM stock_list WHERE code = ?",
+        (code.split(".")[0],),
+    )
+    company_name = name_df["name"].iloc[0] if name_df is not None and not name_df.empty else code
+    industry = name_df["industry"].iloc[0] if name_df is not None and not name_df.empty else "N/A"
+
+    # Get latest fundamentals
+    df = _df_from_sql(
+        """
+        SELECT * FROM fundamentals
+        WHERE ts_code = ?
+        ORDER BY trade_date DESC
+        LIMIT 1
+        """,
+        (code,),
+    )
+
+    if df is None or df.empty:
+        raise RuntimeError(f"No fundamentals in quant_core.db for {symbol}")
+
+    row = df.iloc[0]
+    lines = [
+        f"# Fundamentals for {symbol.upper()} ({company_name}) as of {curr_date}",
+        f"# Source: quant_core.db (local SQLite)",
+        "",
+        f"- 股票简称: {company_name}",
+        f"- 行业: {industry}",
+    ]
+
+    # Valuation metrics
+    for col, label, fmt in [
+        ("pe_ttm", "PE(TTM)", ".2f"),
+        ("pb", "PB", ".2f"),
+        ("ps_ttm", "PS(TTM)", ".2f"),
+        ("dividend_yield", "股息率", ".2f%"),
+        ("market_cap", "总市值", ",.0f"),
+    ]:
+        v = row.get(col)
+        if pd.notna(v):
+            if "cap" in col:
+                lines.append(f"- {label}: {v/1e8:{fmt}} 亿")
+            elif "%" in fmt:
+                lines.append(f"- {label}: {v*100:.2f}%")
+            else:
+                lines.append(f"- {label}: {v:{fmt}}")
+
+    # Profitability metrics
+    lines.append("")
+    lines.append("## 盈利能力")
+    for col, label in [
+        ("roe", "ROE"),
+        ("roa", "ROA"),
+        ("gross_margin", "毛利率"),
+        ("net_margin", "净利率"),
+    ]:
+        v = row.get(col)
+        if pd.notna(v):
+            lines.append(f"- {label}: {v:.2f}%")
+
+    # Growth metrics
+    lines.append("")
+    lines.append("## 成长性")
+    for col, label in [
+        ("revenue_growth", "营收同比增长"),
+        ("profit_growth", "净利润同比增长"),
+        ("eps_growth", "EPS同比增长"),
+        ("peg", "PEG"),
+    ]:
+        v = row.get(col)
+        if pd.notna(v):
+            if col == "peg":
+                lines.append(f"- {label}: {v:.2f}")
+            else:
+                lines.append(f"- {label}: {v:.2f}%")
+
+    # Debt
+    v = row.get("debt_ratio")
+    if pd.notna(v):
+        lines.append("")
+        lines.append("## 偿债能力")
+        lines.append(f"- 资产负债率: {v:.2f}%")
+
+    return "\n".join(lines)
+
+
+def get_balance_sheet(
+    symbol: Annotated[str, "A-share ticker"],
+    freq: str = "quarterly",
+    curr_date: str | None = None,
+) -> str:
+    """Balance sheet is not stored in quant_core.db — always fall back."""
+    raise RuntimeError(
+        "Balance sheet data not available in quant_core.db. "
+        "Route to_vendor will fall back to akshare."
+    )
+
+
+def get_cashflow(
+    symbol: Annotated[str, "A-share ticker"],
+    freq: str = "quarterly",
+    curr_date: str | None = None,
+) -> str:
+    """Cashflow statement is not stored in quant_core.db — always fall back."""
+    raise RuntimeError(
+        "Cashflow statement not available in quant_core.db. "
+        "Route to_vendor will fall back to akshare."
+    )
+
+
+def get_income_statement(
+    symbol: Annotated[str, "A-share ticker"],
+    freq: str = "quarterly",
+    curr_date: str | None = None,
+) -> str:
+    """Income statement is not stored in quant_core.db — always fall back."""
+    raise RuntimeError(
+        "Income statement not available in quant_core.db. "
+        "Route to_vendor will fall back to akshare."
+    )
+
+
+# ===========================================================================
+# Fund flow
+# ===========================================================================
+
+def get_fund_flow(symbol: str) -> str:
+    """Fetch A-share individual stock fund flow from quant_core.db."""
+    code = _to_smartmoney_symbol(symbol)
+
+    df = _df_from_sql(
+        """
+        SELECT trade_date AS Date, main_net_inflow AS main_net,
+               main_net_inflow_pct AS main_pct,
+               super_large_net_inflow AS super_large_net,
+               super_large_net_inflow_pct AS super_large_pct,
+               large_net_inflow AS large_net,
+               large_net_inflow_pct AS large_pct,
+               is_simulated
+        FROM fund_flow
+        WHERE ts_code = ?
+        ORDER BY trade_date DESC
+        LIMIT 5
+        """,
+        (code,),
+    )
+
+    if df is None or df.empty:
+        raise RuntimeError(f"No fund flow data in quant_core.db for {symbol}")
+
+    lines = [
+        f"## {symbol.upper()} Fund Flow (source: quant_core.db / local SQLite)",
+        f"Total records: {len(df)} trading days",
+        "",
+    ]
+
+    if df["is_simulated"].any():
+        lines.append("_Note: some data is simulated (generated when real data was unavailable)_")
+        lines.append("")
+
+    for _, row in df.iterrows():
+        lines.append(f"**Date**: {row['Date']}")
+        lines.append(
+            f"- Main Force Net Inflow: {row['main_net']:,.0f} "
+            f"({row['main_pct']:.2f}%)"
+        )
+        lines.append(
+            f"- Super Large Order Net Inflow: {row['super_large_net']:,.0f} "
+            f"({row['super_large_pct']:.2f}%)"
+        )
+        lines.append(
+            f"- Large Order Net Inflow: {row['large_net']:,.0f} "
+            f"({row['large_pct']:.2f}%)"
+        )
+        lines.append("")
+
+    return "\n".join(lines)
+
+
+# ===========================================================================
+# News / Governance — not stored in quant_core.db
+# ===========================================================================
+
+def get_news(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> str:
+    raise RuntimeError("News not available in quant_core.db")
+
+
+def get_insider_transactions(symbol: str) -> str:
+    raise RuntimeError("Insider transactions not available in quant_core.db")
+
+
+def get_company_announcements(
+    symbol: str,
+    start_date: str,
+    end_date: str,
+) -> str:
+    raise RuntimeError("Company announcements not available in quant_core.db")
+
+
+def get_restricted_release(symbol: str) -> str:
+    raise RuntimeError("Restricted release not available in quant_core.db")
+
+
+def get_institutional_holdings(symbol: str) -> str:
+    raise RuntimeError("Institutional holdings not available in quant_core.db")
+
+
+def get_northbound_hold(symbol: str) -> str:
+    raise RuntimeError("Northbound holdings not available in quant_core.db")
+
+
+def get_industry_valuation(symbol: str) -> str:
+    raise RuntimeError("Industry valuation not available in quant_core.db")
+
+
+def get_earnings_estimates(symbol: str) -> str:
+    raise RuntimeError("Earnings estimates not available in quant_core.db")
+
+
+def get_macro_indicators() -> str:
+    raise RuntimeError("Macro indicators not available in quant_core.db")
