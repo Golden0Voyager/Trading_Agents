@@ -16,9 +16,24 @@ def create_neutral_debator(llm):
 
         trader_decision = state["trader_investment_plan"]
 
+        holdings_context = state.get("holdings_context", {})
+        transactions_context = state.get("transactions_context", [])
+        holdings_line = ""
+        if holdings_context:
+            from tradingagents.portfolio import Portfolio, Holding, Transaction, build_risk_prompt
+            portfolio = Portfolio(
+                holdings={t: Holding.from_dict(d, ticker=t) for t, d in holdings_context.items()}
+            )
+            transactions = [Transaction.from_dict(t) for t in transactions_context]
+            risk_prompt = build_risk_prompt(
+                state["company_of_interest"], portfolio, transactions
+            )
+            if risk_prompt:
+                holdings_line = f"\n{risk_prompt}\n"
+
         prompt = f"""As the Neutral Risk Analyst, your role is to provide a balanced perspective, weighing both the potential benefits and risks of the trader's decision or plan. You prioritize a well-rounded approach, evaluating the upsides and downsides while factoring in broader market trends, potential economic shifts, and diversification strategies.Here is the trader's decision:
 
-{trader_decision}
+{trader_decision}{holdings_line}
 
 Your task is to challenge both the Aggressive and Conservative Analysts, pointing out where each perspective may be overly optimistic or overly cautious. Use insights from the following data sources to support a moderate, sustainable strategy to adjust the trader's decision:
 
