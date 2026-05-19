@@ -22,6 +22,21 @@ def create_trader(llm):
         instrument_context = build_instrument_context(company_name, state.get("company_name", ""))
         investment_plan = state["investment_plan"]
 
+        holdings_context = state.get("holdings_context", {})
+        transactions_context = state.get("transactions_context", [])
+        holdings_line = ""
+        if holdings_context:
+            from tradingagents.portfolio import Portfolio, Holding, Transaction, build_trader_prompt
+            portfolio = Portfolio(
+                holdings={t: Holding.from_dict(d, ticker=t) for t, d in holdings_context.items()}
+            )
+            transactions = [Transaction.from_dict(t) for t in transactions_context]
+            trader_prompt = build_trader_prompt(
+                state["company_of_interest"], portfolio, transactions
+            )
+            if trader_prompt:
+                holdings_line = f"\n{trader_prompt}\n"
+
         messages = [
             {
                 "role": "system",
@@ -38,7 +53,7 @@ def create_trader(llm):
                     f"plan tailored for {company_name}. {instrument_context} This plan incorporates "
                     f"insights from current technical market trends, macroeconomic indicators, and "
                     f"social media sentiment. Use this plan as a foundation for evaluating your next "
-                    f"trading decision.\n\nProposed Investment Plan: {investment_plan}\n\n"
+                    f"trading decision.\n\nProposed Investment Plan: {investment_plan}{holdings_line}\n\n"
                     f"Leverage these insights to make an informed and strategic decision."
                 ),
             },
