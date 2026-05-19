@@ -45,6 +45,24 @@ from .akshare_vendor import (
     get_institutional_holdings as get_akshare_institutional_holdings,
 )
 from .akshare_common import is_a_share_ticker
+from .smartmoney_vendor import (
+    get_stock_data as get_smartmoney_stock_data,
+    get_indicators as get_smartmoney_indicators,
+    get_fundamentals as get_smartmoney_fundamentals,
+    get_balance_sheet as get_smartmoney_balance_sheet,
+    get_cashflow as get_smartmoney_cashflow,
+    get_income_statement as get_smartmoney_income_statement,
+    get_fund_flow as get_smartmoney_fund_flow,
+    get_news as get_smartmoney_news,
+    get_insider_transactions as get_smartmoney_insider_transactions,
+    get_company_announcements as get_smartmoney_company_announcements,
+    get_restricted_release as get_smartmoney_restricted_release,
+    get_institutional_holdings as get_smartmoney_institutional_holdings,
+    get_northbound_hold as get_smartmoney_northbound_hold,
+    get_industry_valuation as get_smartmoney_industry_valuation,
+    get_earnings_estimates as get_smartmoney_earnings_estimates,
+    get_macro_indicators as get_smartmoney_macro_indicators,
+)
 
 # Configuration and routing logic
 from .config import get_config
@@ -93,54 +111,65 @@ VENDOR_LIST = [
     "yfinance",
     "alpha_vantage",
     "akshare",
+    "smartmoney_db",
 ]
 
 # Mapping of methods to their vendor-specific implementations
 VENDOR_METHODS = {
     # core_stock_apis
     "get_stock_data": {
+        "smartmoney_db": get_smartmoney_stock_data,
         "alpha_vantage": get_alpha_vantage_stock,
         "yfinance": get_YFin_data_online,
         "akshare": get_akshare_stock_data,
     },
     # technical_indicators
     "get_indicators": {
+        "smartmoney_db": get_smartmoney_indicators,
         "alpha_vantage": get_alpha_vantage_indicator,
         "yfinance": get_stock_stats_indicators_window,
         "akshare": get_akshare_indicators,
     },
     "get_fund_flow": {
+        "smartmoney_db": get_smartmoney_fund_flow,
         "akshare": get_akshare_fund_flow,
     },
     # fundamental_data
     "get_fundamentals": {
+        "smartmoney_db": get_smartmoney_fundamentals,
         "alpha_vantage": get_alpha_vantage_fundamentals,
         "yfinance": get_yfinance_fundamentals,
         "akshare": get_akshare_fundamentals,
     },
     "get_balance_sheet": {
+        "smartmoney_db": get_smartmoney_balance_sheet,
         "alpha_vantage": get_alpha_vantage_balance_sheet,
         "yfinance": get_yfinance_balance_sheet,
         "akshare": get_akshare_balance_sheet,
     },
     "get_cashflow": {
+        "smartmoney_db": get_smartmoney_cashflow,
         "alpha_vantage": get_alpha_vantage_cashflow,
         "yfinance": get_yfinance_cashflow,
         "akshare": get_akshare_cashflow,
     },
     "get_income_statement": {
+        "smartmoney_db": get_smartmoney_income_statement,
         "alpha_vantage": get_alpha_vantage_income_statement,
         "yfinance": get_yfinance_income_statement,
         "akshare": get_akshare_income_statement,
     },
     "get_industry_valuation": {
+        "smartmoney_db": get_smartmoney_industry_valuation,
         "akshare": get_akshare_industry_valuation,
     },
     "get_earnings_estimates": {
+        "smartmoney_db": get_smartmoney_earnings_estimates,
         "akshare": get_akshare_earnings_estimates,
     },
     # news_data
     "get_news": {
+        "smartmoney_db": get_smartmoney_news,
         "alpha_vantage": get_alpha_vantage_news,
         "yfinance": get_news_yfinance,
         "akshare": get_akshare_news,
@@ -150,23 +179,29 @@ VENDOR_METHODS = {
         "alpha_vantage": get_alpha_vantage_global_news,
     },
     "get_insider_transactions": {
+        "smartmoney_db": get_smartmoney_insider_transactions,
         "alpha_vantage": get_alpha_vantage_insider_transactions,
         "yfinance": get_yfinance_insider_transactions,
         "akshare": get_akshare_insider_transactions,
     },
     "get_company_announcements": {
+        "smartmoney_db": get_smartmoney_company_announcements,
         "akshare": get_akshare_company_announcements,
     },
     "get_restricted_release": {
+        "smartmoney_db": get_smartmoney_restricted_release,
         "akshare": get_akshare_restricted_release,
     },
     "get_institutional_holdings": {
+        "smartmoney_db": get_smartmoney_institutional_holdings,
         "akshare": get_akshare_institutional_holdings,
     },
     "get_northbound_hold": {
+        "smartmoney_db": get_smartmoney_northbound_hold,
         "akshare": get_akshare_northbound_hold,
     },
     "get_macro_indicators": {
+        "smartmoney_db": get_smartmoney_macro_indicators,
         "akshare": get_akshare_macro_indicators,
     },
 }
@@ -203,15 +238,21 @@ def route_to_vendor(method: str, *args, **kwargs):
         raise ValueError(f"Method '{method}' not supported")
 
     # A-share routing: if the first positional arg looks like an A-share ticker,
-    # hoist akshare to the front of the fallback chain. yfinance still serves as
-    # ultimate backup if akshare fails with AlphaVantageRateLimitError.
+    # hoist akshare near the front. If smartmoney_db is explicitly configured,
+    # keep it at the very front for zero-latency local reads.
     symbol = args[0] if args else kwargs.get("symbol") or kwargs.get("ticker")
     if (
         isinstance(symbol, str)
         and is_a_share_ticker(symbol)
         and "akshare" in VENDOR_METHODS[method]
     ):
-        primary_vendors = ["akshare"] + [v for v in primary_vendors if v != "akshare"]
+        if "smartmoney_db" in primary_vendors:
+            # smartmoney_db first (local SQLite), then akshare, then rest
+            primary_vendors = ["smartmoney_db", "akshare"] + [
+                v for v in primary_vendors if v not in ("smartmoney_db", "akshare")
+            ]
+        else:
+            primary_vendors = ["akshare"] + [v for v in primary_vendors if v != "akshare"]
 
     # Build fallback chain: primary vendors first, then remaining available vendors
     all_available_vendors = list(VENDOR_METHODS[method].keys())
