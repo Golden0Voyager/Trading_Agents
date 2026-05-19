@@ -471,8 +471,12 @@ def update_display(layout, spinner_text=None, stats_handler=None, start_time=Non
     layout["footer"].update(Panel(stats_table, border_style="grey50"))
 
 
-def get_user_selections():
-    """Get all user selections before starting the analysis display."""
+def get_user_selections(preselected_tickers: list[str] | None = None):
+    """Get all user selections before starting the analysis display.
+
+    Args:
+        preselected_tickers: If provided, skip the ticker input prompt and use these tickers directly.
+    """
     # Display ASCII art welcome message
     with open(Path(__file__).parent / "static" / "welcome.txt", "r", encoding="utf-8") as f:
         welcome_ascii = f.read()
@@ -513,21 +517,11 @@ def get_user_selections():
     # Step 1: Ticker symbol(s)
     from tradingagents.ticker_resolver import resolve_ticker
 
-    while True:
-        console.print(
-            create_question_box(
-                "Step 1: Ticker Symbol",
-                "Enter ticker symbol(s) to analyze, comma-separated for multiple (examples: SPY, AAPL,MSFT,GOOGL)",
-                "SPY",
-            )
-        )
-        raw_tickers = get_ticker()
-        tickers = _parse_tickers_input(raw_tickers)
-
-        # Resolve tickers and show names for confirmation
+    if preselected_tickers is not None:
+        # Use watchlist or CLI-provided tickers directly
         selected_tickers = []
         ticker_names = []
-        for t in tickers:
+        for t in preselected_tickers:
             try:
                 resolved = resolve_ticker(t)
                 selected_tickers.append(resolved["ticker"])
@@ -538,21 +532,56 @@ def get_user_selections():
                 selected_tickers.append(t.upper())
                 ticker_names.append(f"[cyan]{t.upper()}[/cyan] (未知)")
 
+        console.print(
+            create_question_box(
+                "Step 1: Ticker Symbol",
+                f"Using pre-selected tickers from watchlist/args: {', '.join(preselected_tickers)}",
+            )
+        )
         console.print("\n[bold]已解析股票:[/bold]")
         for line in ticker_names:
             console.print(f"  • {line}")
+    else:
+        while True:
+            console.print(
+                create_question_box(
+                    "Step 1: Ticker Symbol",
+                    "Enter ticker symbol(s) to analyze, comma-separated for multiple (examples: SPY, AAPL,MSFT,GOOGL)",
+                    "SPY",
+                )
+            )
+            raw_tickers = get_ticker()
+            tickers = _parse_tickers_input(raw_tickers)
 
-        import questionary
-        confirmed = questionary.confirm(
-            "股票信息是否正确？",
-            default=True,
-            style=questionary.Style([
-                ("question", "fg:green bold"),
-            ]),
-        ).ask()
-        if confirmed:
-            break
-        console.print("[yellow]请重新输入股票代码...[/yellow]\n")
+            # Resolve tickers and show names for confirmation
+            selected_tickers = []
+            ticker_names = []
+            for t in tickers:
+                try:
+                    resolved = resolve_ticker(t)
+                    selected_tickers.append(resolved["ticker"])
+                    name = resolved.get("company_name", "")
+                    ticker_names.append(f"[cyan]{resolved['ticker']}[/cyan] {name}")
+                except Exception as e:
+                    console.print(f"[yellow]解析提示 {t}: {e}[/yellow]")
+                    selected_tickers.append(t.upper())
+                    ticker_names.append(f"[cyan]{t.upper()}[/cyan] (未知)")
+
+            console.print("\n[bold]已解析股票:[/bold]")
+            for line in ticker_names:
+                console.print(f"  • {line}")
+
+            import questionary
+            confirmed = questionary.confirm(
+                "股票信息是否正确？",
+                default=True,
+                style=questionary.Style([
+                    ("question", "fg:green bold"),
+                ]),
+            ).ask()
+            if confirmed:
+                break
+            console.print("[yellow]请重新输入股票代码...[/yellow]\n")
 
     if len(selected_tickers) == 1:
         selected_ticker = selected_tickers[0]
@@ -1618,11 +1647,12 @@ def run_analysis(checkpoint: bool = False, selections: dict | None = None):
         display_complete_report(final_state)
 
 
-def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: bool = False, output_dir: Optional[Path] = None):
+def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: bool = False, output_dir: Optional[Path] = None, watchlist_name: Optional[str] = None):
     """Run unattended batch analysis for multiple tickers."""
-    timestamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+    date_stamp = __import__("datetime").datetime.now().strftime("%Y%m%d")
     if output_dir is None:
-        output_dir = Path.cwd() / "reports" / f"batch_{timestamp}"
+        suffix = watchlist_name if watchlist_name else "custom"
+        output_dir = Path.cwd() / "reports" / f"{date_stamp}_batch_{suffix}"
     else:
         output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -1747,17 +1777,18 @@ def analyze(
             console.print("[red]No tickers to analyze.[/red]")
             raise typer.Exit(1)
 
-        run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None)
+        run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist)
         return
 
     # Interactive mode
     mode = ask_mode()
     if mode == "batch":
-        _, ticker_list = select_watchlist_interactive()
+        watchlist_name, ticker_list = select_watchlist_interactive()
         profile_config = select_profile_interactive()
         if profile_config is None:
-            # User chose to create new profile — run the normal selection flow
-            selections = get_user_selections()
+            # User chose to create new profile — run the normal selection flow,
+            # but pass through the watchlist tickers so we don't ask again.
+            selections = get_user_selections(preselected_tickers=ticker_list)
             profile_config = {
                 "analysts": [a.value for a in selections["analysts"]],
                 "research_depth": selections["research_depth"],
@@ -1783,9 +1814,9 @@ def analyze(
                 run_analysis(checkpoint=checkpoint, selections=selections)
             else:
                 # User selected an existing profile — use batch flow with a single ticker
-                run_batch_analysis([ticker_list[0]], profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None)
+                run_batch_analysis([ticker_list[0]], profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name)
         else:
-            run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None)
+            run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name)
     else:
         # Single / custom mode
         selections = get_user_selections()
