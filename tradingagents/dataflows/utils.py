@@ -12,6 +12,32 @@ SavePathType = Annotated[str, "File path to save data. If None, data is not save
 # never escapes a containing directory when interpolated into a path.
 _TICKER_PATH_RE = re.compile(r"^[A-Za-z0-9._\-\^]+$")
 
+# Patterns to extract a clean ticker from LLM-hallucinated text
+# (e.g. "极速查询到的证券代码为 601899.SS")
+_A_SHARE_TICKER_RE = re.compile(r"\b(\d{6}\.(?:SS|SZ|BJ))\b", re.IGNORECASE)
+_GENERIC_TICKER_RE = re.compile(
+    r"\b([A-Za-z0-9._\-\^]+\.(?:SS|SZ|BJ|HK|TO|L|T|F|AS|BR|MI|ST|PA|SW|TW|VX|SA))\b",
+    re.IGNORECASE,
+)
+
+
+def _sanitize_ticker(value: str) -> str | None:
+    """Extract a clean ticker from a potentially polluted string.
+
+    LLMs sometimes wrap tickers in explanatory text (e.g.
+    '极速查询到的证券代码为 601899.SS'). This function attempts to
+    extract the actual ticker using known patterns.
+    """
+    m = _A_SHARE_TICKER_RE.search(value)
+    if m:
+        return m.group(1).upper()
+
+    m = _GENERIC_TICKER_RE.search(value)
+    if m:
+        return m.group(1).upper()
+
+    return None
+
 
 def safe_ticker_component(value: str, *, max_len: int = 32) -> str:
     """Validate ``value`` is safe to interpolate into a filesystem path.
@@ -22,23 +48,29 @@ def safe_ticker_component(value: str, *, max_len: int = 32) -> str:
     ``"../../../etc/foo"`` flows into ``os.path.join`` / ``Path /`` and
     escapes the configured cache, checkpoint, or results directory.
 
-    Returns ``value`` unchanged when it matches the allowed pattern; raises
-    ``ValueError`` otherwise.
+    When the value does not directly match the allowed pattern (e.g. LLM
+    hallucinates explanatory text around the ticker), this function attempts
+    to *extract* the ticker before rejecting.
+
+    Returns the cleaned ticker when valid; raises ``ValueError`` otherwise.
     """
     if not isinstance(value, str) or not value:
         raise ValueError(f"ticker must be a non-empty string, got {value!r}")
+
+    # Direct match — fast path
+    if _TICKER_PATH_RE.fullmatch(value) and len(value) <= max_len and set(value) != {"."}:
+        return value
+
+    # Try to extract a clean ticker from polluted input (e.g. LLM hallucination)
+    cleaned = _sanitize_ticker(value)
+    if cleaned and _TICKER_PATH_RE.fullmatch(cleaned) and len(cleaned) <= max_len:
+        return cleaned
+
     if len(value) > max_len:
         raise ValueError(f"ticker exceeds {max_len} chars: {value!r}")
-    if not _TICKER_PATH_RE.fullmatch(value):
-        raise ValueError(
-            f"ticker contains characters not allowed in a filesystem path: {value!r}"
-        )
-    # The regex above allows '.', so values like '.', '..', '...' would pass,
-    # and as a path component they traverse the parent directory. Reject any
-    # value that's only dots.
-    if set(value) == {"."}:
-        raise ValueError(f"ticker cannot consist solely of dots: {value!r}")
-    return value
+    raise ValueError(
+        f"ticker contains characters not allowed in a filesystem path: {value!r}"
+    )
 
 
 def save_output(data: pd.DataFrame, tag: str, save_path: SavePathType = None) -> None:
