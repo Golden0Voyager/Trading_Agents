@@ -34,7 +34,7 @@ DEFAULT_CONFIG = {
     # Debate and discussion settings
     "max_debate_rounds": 1,
     "max_risk_discuss_rounds": 1,
-    "max_recur_limit": 100,
+    "max_recur_limit": 200,
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
     # Note: A-share tickers (.SS/.SZ/.BJ) auto-route to akshare regardless of
