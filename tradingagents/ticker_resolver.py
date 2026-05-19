@@ -184,9 +184,16 @@ def resolve_ticker(user_input: str) -> dict[str, str]:
     if not raw:
         raise ValueError("股票代码/名称不能为空")
 
-    # 1. Already has a known exchange suffix -> pass through
-    if re.search(r"\.(SS|SZ|BJ|HK|TO|L|T|F|AS|BR|MI|ST|PA|SW|TW|VX|SA)$", raw, re.IGNORECASE):
-        ticker = raw.upper()
+    # 1. Already has a known exchange suffix -> extract and pass through
+    # Use a capturing group so we pull out just the ticker, not surrounding
+    # LLM hallucination like "极速查询到的证券代码为 601899.SS".
+    suffix_match = re.search(
+        r"\b([A-Z0-9._\-^]+\.(SS|SZ|BJ|HK|TO|L|T|F|AS|BR|MI|ST|PA|SW|TW|VX|SA))\b",
+        raw,
+        re.IGNORECASE,
+    )
+    if suffix_match:
+        ticker = suffix_match.group(1).upper()
         company_name = _fetch_company_name(ticker) or ""
         return {"ticker": ticker, "company_name": company_name}
 
