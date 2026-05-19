@@ -302,8 +302,33 @@ class TradingAgentsGraph:
         # Resolve any pending memory-log entries for this ticker before the pipeline runs.
         self._resolve_pending_entries(ticker)
 
-        # Recompile with a checkpointer if the user opted in.
+        # If checkpointing is enabled, check whether a completed state log already
+        # exists on disk.  When it does, we can return the cached result directly
+        # instead of resuming from (or re-running) the graph.
         if self.config.get("checkpoint_enabled"):
+            safe_ticker = safe_ticker_component(ticker)
+            log_dir = Path(self.config["results_dir"]) / safe_ticker / "TradingAgentsStrategy_logs"
+            log_path = log_dir / f"full_states_log_{trade_date}.json"
+            if log_path.exists() and log_path.stat().st_size > 0:
+                try:
+                    with open(log_path, "r", encoding="utf-8") as f:
+                        cached_state = json.load(f)
+                    if cached_state.get("final_trade_decision"):
+                        logger.info(
+                            "Found completed state log for %s on %s, skipping graph run.",
+                            ticker, trade_date,
+                        )
+                        self.curr_state = cached_state
+                        # Clear any stale checkpoint so the next run starts fresh.
+                        clear_checkpoint(
+                            self.config["data_cache_dir"], ticker, str(trade_date)
+                        )
+                        return cached_state, self.process_signal(
+                            cached_state["final_trade_decision"]
+                        )
+                except Exception:
+                    pass
+
             self._checkpointer_ctx = get_checkpointer(
                 self.config["data_cache_dir"], ticker
             )
