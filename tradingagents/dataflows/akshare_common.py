@@ -6,10 +6,16 @@ depend on this module exclusively for cross-cutting concerns.
 """
 from __future__ import annotations
 
+import logging
 import math
 import os
+import time
 from contextlib import contextmanager
-from typing import Any, Generator, Optional
+from typing import Any, Callable, Generator, Optional, TypeVar
+
+logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
 
 
 class AShareSymbolError(ValueError):
@@ -48,6 +54,30 @@ def to_akshare_symbol(ticker: str, style: str) -> str:
     if style == "lower_prefix":
         return f"{prefix.lower()}{code}"
     raise ValueError(f"Unknown style: {style!r}")
+
+
+def _akshare_retry(
+    func: Callable[[], T],
+    max_retries: int = 3,
+    base_delay: float = 1.0,
+) -> T:
+    """Execute an akshare call with exponential backoff on transient network errors."""
+    for attempt in range(max_retries + 1):
+        try:
+            return func()
+        except (ConnectionError, TimeoutError) as exc:
+            if attempt < max_retries:
+                delay = base_delay * (2 ** attempt)
+                logger.warning(
+                    "Akshare network error (%s), retrying in %.0fs (%d/%d)",
+                    type(exc).__name__,
+                    delay,
+                    attempt + 1,
+                    max_retries,
+                )
+                time.sleep(delay)
+            else:
+                raise
 
 
 @contextmanager
