@@ -16,7 +16,13 @@ from typing import Annotated, Optional
 import akshare as ak
 import pandas as pd
 
-from .akshare_common import format_money_cn, no_proxy, safe_float, to_akshare_symbol
+from .akshare_common import (
+    _akshare_retry,
+    format_money_cn,
+    no_proxy,
+    safe_float,
+    to_akshare_symbol,
+)
 from .stockstats_utils import _clean_dataframe
 
 logger = logging.getLogger(__name__)
@@ -344,12 +350,14 @@ def get_indicators(
     start = end - pd.Timedelta(days=look_back_days * 2 + 260)
 
     with _akshare_task_context(f"📊 {symbol} 技术指标({indicator})"), no_proxy():
-        df = ak.stock_zh_a_hist(
-            symbol=bare,
-            period="daily",
-            start_date=start.strftime("%Y%m%d"),
-            end_date=end.strftime("%Y%m%d"),
-            adjust="qfq",
+        df = _akshare_retry(
+            lambda: ak.stock_zh_a_hist(
+                symbol=bare,
+                period="daily",
+                start_date=start.strftime("%Y%m%d"),
+                end_date=end.strftime("%Y%m%d"),
+                adjust="qfq",
+            )
         )
 
     if df is None or df.empty:
