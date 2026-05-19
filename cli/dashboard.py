@@ -239,7 +239,12 @@ class AnalysisDashboard:
         max_debate_rounds: int = 1,
         max_risk_rounds: int = 1,
     ) -> None:
-        """根据 chunk 内容推断当前 pipeline 阶段与进度。"""
+        """根据 agent 状态推断当前 pipeline 阶段与进度。
+
+        不直接检查 chunk key 是否存在，因为 LangGraph 的 values 模式
+        下每个 chunk 都包含完整状态（包括初始为空的 debate_state），
+        会导致一启动就误判到后面阶段。
+        """
         # Stage 5: Portfolio
         if self.agent_status.get("Portfolio Manager") == "completed":
             self.current_stage = "Portfolio"
@@ -248,14 +253,15 @@ class AnalysisDashboard:
             return
 
         # Stage 4: Risk Debate
-        if chunk.get("risk_debate_state"):
-            risk = chunk["risk_debate_state"]
+        if any(
+            self.agent_status.get(a) in ("in_progress", "completed")
+            for a in ("Aggressive Analyst", "Neutral Analyst", "Conservative Analyst")
+        ):
+            risk = chunk.get("risk_debate_state") or {}
             self.current_stage = "Risk Debate"
-            # 粗略估计：如果 judge 已有内容说明接近尾声
             if risk.get("judge_decision", "").strip():
                 self.stage_progress = 0.9
             else:
-                # 根据已有角色 history 数量估算
                 roles = ["aggressive", "conservative", "neutral"]
                 filled = sum(1 for r in roles if risk.get(f"{r}_history", "").strip())
                 self.stage_progress = min(filled / max(1, len(roles)), 0.8)
@@ -263,15 +269,18 @@ class AnalysisDashboard:
             return
 
         # Stage 3: Trading
-        if chunk.get("trader_investment_plan"):
+        if self.agent_status.get("Trader") in ("in_progress", "completed"):
             self.current_stage = "Trading"
             self.stage_progress = 0.5
             self.overall_progress = 0.55
             return
 
         # Stage 2: Research Debate
-        if chunk.get("investment_debate_state"):
-            debate = chunk["investment_debate_state"]
+        if any(
+            self.agent_status.get(a) in ("in_progress", "completed")
+            for a in ("Bull Researcher", "Bear Researcher", "Research Manager")
+        ):
+            debate = chunk.get("investment_debate_state") or {}
             self.current_stage = "Research Debate"
             if debate.get("judge_decision", "").strip():
                 self.stage_progress = 0.9
@@ -552,6 +561,8 @@ def render_footer(
             stats_parts.append(f"Tokens: {tin_str}↑ {tout_str}↓")
         else:
             stats_parts.append("Tokens: --")
+        if stats.get("cost") is not None:
+            stats_parts.append(f"Cost: ${stats['cost']:.4f}")
 
     stats_parts.append(f"Reports: {reports_completed}/{reports_total}")
 
