@@ -104,6 +104,14 @@ class BatchRunner:
             pass
         return None
 
+    @staticmethod
+    def _build_ticker_dir_name(ticker: str, company_name: str = "") -> str:
+        """Build directory name: 中文名称_代码 or 代码."""
+        name = (company_name or "").strip()
+        if name:
+            return f"{name}_{ticker}"
+        return ticker
+
     def _is_already_completed(self, ticker: str) -> bool:
         """Check if ticker was already analysed for the target date.
 
@@ -114,12 +122,16 @@ class BatchRunner:
         """
         target_date = self.profile_config.get("analysis_date") or datetime.now().strftime("%Y-%m-%d")
 
-        # Candidate folder names: raw ticker + resolved suffix variants
+        # Candidate folder names: raw ticker + resolved suffix variants + named variants
         candidates = {ticker}
         try:
             from tradingagents.ticker_resolver import resolve_ticker
             resolved = resolve_ticker(ticker)
             candidates.add(resolved["ticker"])
+            company_name = resolved.get("company_name", "")
+            if company_name:
+                candidates.add(self._build_ticker_dir_name(ticker, company_name))
+                candidates.add(self._build_ticker_dir_name(resolved["ticker"], company_name))
         except Exception:
             pass
 
@@ -163,7 +175,7 @@ class BatchRunner:
             or config["deep_think_llm"]
         )
         config["backend_url"] = self.profile_config.get("backend_url")
-        config["llm_provider"] = self.profile_config.get("llm_provider", "openai").lower()
+        config["llm_provider"] = self.profile_config.get("llm_provider", config["llm_provider"]).lower()
         config["google_thinking_level"] = self.profile_config.get("google_thinking_level")
         config["openai_reasoning_effort"] = self.profile_config.get("openai_reasoning_effort")
         config["anthropic_effort"] = self.profile_config.get("anthropic_effort")
@@ -241,7 +253,8 @@ class BatchRunner:
         final_state = trace[-1] if trace else {}
 
         # Save report
-        ticker_dir = self.output_dir / ticker
+        ticker_dir_name = self._build_ticker_dir_name(ticker, company_name)
+        ticker_dir = self.output_dir / ticker_dir_name
         ticker_dir.mkdir(parents=True, exist_ok=True)
         save_report_to_disk(final_state, ticker, ticker_dir)
 
@@ -258,10 +271,10 @@ class BatchRunner:
         import re
         decision = final_state.get("final_trade_decision", "")
         company = final_state.get("company_name", "")
-        rating_match = re.search(r"(?:Rating|Decision)\s*[:：]\s*(\w+)", decision, re.IGNORECASE)
-        entry_match = re.search(r"Entry\s*[:：]\s*([\d\-.—]+)", decision, re.IGNORECASE)
-        stop_match = re.search(r"Stop\s*[:：]\s*([\d\-.—]+)", decision, re.IGNORECASE)
-        size_match = re.search(r"Size\s*[:：]\s*([\d.%—]+)", decision, re.IGNORECASE)
+        rating_match = re.search(r"(?:\*\*)?(?:Rating|Decision)(?:\*\*)?\s*[:：]\s*(\w+)", decision, re.IGNORECASE)
+        entry_match = re.search(r"(?:\*\*)?Entry(?:\*\*)?\s*[:：]\s*([\d\-.—]+)", decision, re.IGNORECASE)
+        stop_match = re.search(r"(?:\*\*)?Stop(?:\*\*)?\s*[:：]\s*([\d\-.—]+)", decision, re.IGNORECASE)
+        size_match = re.search(r"(?:\*\*)?Size(?:\*\*)?\s*[:：]\s*([\d.%—]+)", decision, re.IGNORECASE)
 
         self.summaries[ticker] = {
             "company": company or ticker,
@@ -367,10 +380,11 @@ class BatchRunner:
                 })
             else:
                 s = self.summaries.get(ticker, {})
+                dir_name = self._build_ticker_dir_name(ticker, s.get("company", ""))
                 lines.append(
                     f"| {ticker} | {s.get('company', ticker)} | {s.get('rating', '—')} | "
                     f"{s.get('entry', '—')} | {s.get('stop', '—')} | {s.get('size', '—')} | ✅ | "
-                    f"[Report](./{ticker}/complete_report.md) |"
+                    f"[Report](./{dir_name}/complete_report.md) |"
                 )
                 json_rows.append({
                     "ticker": ticker,
@@ -402,8 +416,14 @@ class BatchRunner:
             from cli.main import _translate_content, _split_translation_chunks
             from tradingagents.llm_clients.factory import create_llm_client
             try:
-                provider = self.profile_config.get("llm_provider", "openai")
-                model = self.profile_config.get("quick_think_llm") or self.profile_config.get("deep_think_llm")
+                provider = self.profile_config.get("llm_provider", DEFAULT_CONFIG["llm_provider"])
+                model = (
+                    self.profile_config.get("shallow_thinker")
+                    or self.profile_config.get("quick_think_llm")
+                    or self.profile_config.get("deep_thinker")
+                    or self.profile_config.get("deep_think_llm")
+                    or DEFAULT_CONFIG["quick_think_llm"]
+                )
                 base_url = self.profile_config.get("backend_url")
                 if model:
                     client = create_llm_client(provider, model, base_url)
