@@ -261,6 +261,10 @@ def route_to_vendor(method: str, *args, **kwargs):
         if vendor not in fallback_vendors:
             fallback_vendors.append(vendor)
 
+    # Track whether we are serving an A-share ticker for targeted logging
+    symbol = args[0] if args else kwargs.get("symbol") or kwargs.get("ticker")
+    is_ashare = isinstance(symbol, str) and is_a_share_ticker(symbol)
+
     for vendor in fallback_vendors:
         if vendor not in VENDOR_METHODS[method]:
             continue
@@ -269,17 +273,38 @@ def route_to_vendor(method: str, *args, **kwargs):
         impl_func = vendor_impl[0] if isinstance(vendor_impl, list) else vendor_impl
 
         try:
-            return impl_func(*args, **kwargs)
+            result = impl_func(*args, **kwargs)
+            # Warn when A-share data ultimately came from yfinance (data quality risk)
+            if is_ashare and vendor == "yfinance":
+                logger.warning(
+                    "A-share symbol '%s' method='%s' fell back to yfinance. "
+                    "Data source differs from AkShare; indicators may have "
+                    "systematic bias due to different adjustment factors.",
+                    symbol,
+                    method,
+                )
+            return result
         except Exception as exc:
-            logger.debug(
-                "Vendor '%s' failed for method='%s' symbol='%s': %s(%s)",
-                vendor,
-                method,
-                args[0] if args else kwargs.get("symbol") or kwargs.get("ticker"),
-                type(exc).__name__,
-                exc,
-            )
+            # For A-share tickers, elevate AkShare failure from debug -> warning
+            if is_ashare and vendor == "akshare":
+                logger.warning(
+                    "AkShare failed for '%s' method='%s': %s(%s). "
+                    "Will attempt fallback vendor next.",
+                    symbol,
+                    method,
+                    type(exc).__name__,
+                    exc,
+                )
+            else:
+                logger.debug(
+                    "Vendor '%s' failed for method='%s' symbol='%s': %s(%s)",
+                    vendor,
+                    method,
+                    symbol,
+                    type(exc).__name__,
+                    exc,
+                )
             continue  # Try next vendor in fallback chain
 
-    logger.error("No available vendor for method='%s' symbol='%s'", method, args[0] if args else kwargs.get("symbol") or kwargs.get("ticker"))
+    logger.error("No available vendor for method='%s' symbol='%s'", method, symbol)
     raise RuntimeError(f"No available vendor for '{method}'")
