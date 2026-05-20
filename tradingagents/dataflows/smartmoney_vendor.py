@@ -278,7 +278,7 @@ def get_fundamentals(
         v = row.get(col)
         if pd.notna(v):
             if "cap" in col:
-                lines.append(f"- {label}: {v/1e8:{fmt}} 亿")
+                lines.append(f"- {label}: {v/1e8:{fmt}} 亿 (≈{v/1e9:.2f} billion CNY)")
             elif "%" in fmt:
                 lines.append(f"- {label}: {v*100:.2f}%")
             else:
