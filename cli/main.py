@@ -418,6 +418,38 @@ def select_profile_interactive() -> dict:
 def save_report_to_disk(final_state, ticker: str, save_path: Path):
     """Save complete analysis report to disk with organized subfolders."""
     save_path.mkdir(parents=True, exist_ok=True)
+
+    # ------------------------------------------------------------------
+    # Global company-name sanitization: correct LLM hallucinations before
+    # any report text hits the disk.  Operates on final_state in-place.
+    # ------------------------------------------------------------------
+    from tradingagents.agents.utils.agent_utils import sanitize_company_name_in_report
+
+    company_name = final_state.get("company_name", "")
+    _report_keys = [
+        "market_report",
+        "sentiment_report",
+        "news_report",
+        "fundamentals_report",
+        "governance_report",
+        "industry_report",
+        "trader_investment_plan",
+        "final_trade_decision",
+    ]
+    for key in _report_keys:
+        if isinstance(final_state.get(key), str):
+            final_state[key] = sanitize_company_name_in_report(
+                final_state[key], ticker, company_name
+            )
+    for debate_key in ["investment_debate_state", "risk_debate_state"]:
+        debate = final_state.get(debate_key)
+        if isinstance(debate, dict):
+            for sub_key in debate:
+                if isinstance(debate.get(sub_key), str):
+                    debate[sub_key] = sanitize_company_name_in_report(
+                        debate[sub_key], ticker, company_name
+                    )
+
     sections = []
 
     _titles = {
