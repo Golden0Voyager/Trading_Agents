@@ -19,6 +19,7 @@ import pandas as pd
 from .akshare_common import (
     _akshare_retry,
     format_money_cn,
+    is_a_share_ticker,
     no_proxy,
     safe_float,
     to_akshare_symbol,
@@ -78,16 +79,24 @@ def get_stock_data(
     start_date: Annotated[str, "Start date YYYY-MM-DD"],
     end_date: Annotated[str, "End date YYYY-MM-DD"],
 ) -> str:
-    """Fetch A-share daily OHLCV from Eastmoney via akshare (forward-adjusted)."""
+    """Fetch A-share daily OHLCV from Eastmoney via akshare (forward-adjusted).
+
+    Uses exponential-backoff retry (3 attempts) to tolerate AkShare
+    rate-limiting before falling back to the next vendor in the chain.
+    """
     code = to_akshare_symbol(symbol, "bare")
 
     with _akshare_task_context(f"📊 {symbol} 历史行情"), no_proxy():
-        df = ak.stock_zh_a_hist(
-            symbol=code,
-            period="daily",
-            start_date=_to_yyyymmdd(start_date),
-            end_date=_to_yyyymmdd(end_date),
-            adjust="qfq",
+        df = _akshare_retry(
+            lambda: ak.stock_zh_a_hist(
+                symbol=code,
+                period="daily",
+                start_date=_to_yyyymmdd(start_date),
+                end_date=_to_yyyymmdd(end_date),
+                adjust="qfq",
+            ),
+            max_retries=3,
+            base_delay=2.0,
         )
 
     if df is None or df.empty:
