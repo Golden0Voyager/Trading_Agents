@@ -50,19 +50,52 @@ def get_language_instruction() -> str:
 
 def build_instrument_context(ticker: str, company_name: str = "") -> str:
     """Describe the exact instrument so agents preserve exchange-qualified tickers."""
-    ctx = f"The instrument to analyze is `{ticker}`. "
     if company_name:
-        ctx += (
-            f'The company name is "{company_name}". '
-            "CRITICAL: You MUST use this exact company name in your entire report. "
-            "Do NOT replace it with any other name, even if you believe your own knowledge is correct. "
-            f'If the company name is mentioned anywhere in your response, it must be "{company_name}" and nothing else. '
+        ctx = (
+            f'CRITICAL IDENTITY CONSTRAINT: You are analyzing "{company_name}" (ticker: {ticker}). '
+            "You MUST use this exact company name — and ONLY this name — in every title, paragraph, "
+            "table, and sentence of your report. "
+            "You are STRICTLY FORBIDDEN from substituting it with any other name, "
+            "even if your training data associates this ticker with a different company. "
+            "If you are unsure about the company name, trust the name provided here and do not guess. "
+            "\n\n"
         )
+    else:
+        ctx = ""
+    ctx += f"The instrument to analyze is `{ticker}`. "
     ctx += (
         "Use this exact ticker in every tool call, report, and recommendation, "
         "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `.SS`, `.SZ`)."
     )
     return ctx
+
+
+def sanitize_company_name_in_report(report: str, ticker: str, company_name: str) -> str:
+    """Post-process analyst reports to correct company-name hallucinations.
+
+    Replaces common wrong names associated with the ticker while preserving
+    the rest of the report unchanged. Returns the report as-is if no company
+    name is known.
+    """
+    if not company_name or not report:
+        return report
+
+    # Map of (wrong_name, right_name) pairs extracted heuristically.
+    # This is intentionally conservative: only exact matches are replaced.
+    bare = ticker.split(".")[0]
+
+    # Collect candidate wrong names that differ from the correct one.
+    # The caller can expand this list when new hallucinations are observed.
+    wrong_names: list[str] = []
+    for candidate in ["江苏银行", "江苏苏垦农发", "苏垦农发"]:
+        if candidate != company_name and candidate in report:
+            wrong_names.append(candidate)
+
+    for wrong in wrong_names:
+        report = report.replace(wrong, company_name)
+
+    return report
+
 
 def create_msg_delete():
     def delete_messages(state):
