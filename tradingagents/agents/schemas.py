@@ -204,6 +204,18 @@ class PortfolioDecision(BaseModel):
         default=None,
         description="Optional recommended holding period, e.g. '3-6 months'.",
     )
+    entry_price: Optional[float] = Field(
+        default=None,
+        description="Optional entry price, inherited from the Trader's proposal.",
+    )
+    stop_loss: Optional[float] = Field(
+        default=None,
+        description="Optional stop-loss price, inherited from the Trader's proposal.",
+    )
+    position_size: Optional[str] = Field(
+        default=None,
+        description="Optional position sizing guidance, inherited from the Trader's proposal.",
+    )
 
 
 def render_pm_decision(decision: PortfolioDecision) -> str:
@@ -225,4 +237,10 @@ def render_pm_decision(decision: PortfolioDecision) -> str:
         parts.extend(["", f"**Price Target**: {decision.price_target}"])
     if decision.time_horizon:
         parts.extend(["", f"**Time Horizon**: {decision.time_horizon}"])
+    if decision.entry_price is not None:
+        parts.extend(["", f"**Entry**: {decision.entry_price}"])
+    if decision.stop_loss is not None:
+        parts.extend(["", f"**Stop**: {decision.stop_loss}"])
+    if decision.position_size:
+        parts.extend(["", f"**Size**: {decision.position_size}"])
     return "\n".join(parts)
