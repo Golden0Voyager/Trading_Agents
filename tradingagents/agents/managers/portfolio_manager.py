@@ -78,7 +78,10 @@ def create_portfolio_manager(llm):
 
 ---
 
-Be decisive and ground every conclusion in specific evidence from the analysts.{get_language_instruction()}"""
+**Decision Requirements:**
+- Extract the entry price, stop-loss, and position sizing from the Trader's transaction proposal above and populate the corresponding fields in your decision.
+- If the Trader's proposal lacks any of these values, leave that field empty rather than estimating or inventing a number.
+- Ground every conclusion in specific evidence from the analysts.{get_language_instruction()}"""
 
         final_trade_decision = invoke_structured_or_freetext(
             structured_llm,
