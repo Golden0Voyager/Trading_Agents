@@ -34,7 +34,10 @@ DEFAULT_CONFIG = {
     # Data vendor configuration
     # Category-level configuration (default for all tools in category).
     # Note: A-share tickers (.SS/.SZ/.BJ) auto-route to smartmoney_db first,
-    # then akshare, regardless of the value here.
+    # then akshare, then yfinance as last resort.
+    #
+    # 2026-05-20: 优先依赖 AkShare 作为 A 股外部数据源，yfinance 仅作为最后兜底。
+    # 如需完全禁用 yfinance fallback，可设置环境变量 DISABLE_YFINANCE_FALLBACK=1。
     "data_vendors": {
         "core_stock_apis": "smartmoney_db,akshare,yfinance",
         "technical_indicators": "smartmoney_db,akshare,yfinance",
