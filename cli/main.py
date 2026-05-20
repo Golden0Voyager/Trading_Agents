@@ -92,6 +92,9 @@ def get_user_selections(preselected_tickers: list[str] | None = None):
     # Step 1: Ticker symbol(s)
     from tradingagents.ticker_resolver import resolve_ticker
 
+    # Map resolved ticker -> company_name for downstream naming
+    ticker_to_name: dict[str, str] = {}
+
     if preselected_tickers is not None:
         # Use watchlist or CLI-provided tickers directly
         selected_tickers = []
@@ -101,6 +104,7 @@ def get_user_selections(preselected_tickers: list[str] | None = None):
                 resolved = resolve_ticker(t)
                 selected_tickers.append(resolved["ticker"])
                 name = resolved.get("company_name", "")
+                ticker_to_name[resolved["ticker"]] = name
                 ticker_names.append(f"[cyan]{resolved['ticker']}[/cyan] {name}")
             except Exception as e:
                 console.print(f"[yellow]解析提示 {t}: {e}[/yellow]")
@@ -136,6 +140,7 @@ def get_user_selections(preselected_tickers: list[str] | None = None):
                     resolved = resolve_ticker(t)
                     selected_tickers.append(resolved["ticker"])
                     name = resolved.get("company_name", "")
+                    ticker_to_name[resolved["ticker"]] = name
                     ticker_names.append(f"[cyan]{resolved['ticker']}[/cyan] {name}")
                 except Exception as e:
                     console.print(f"[yellow]解析提示 {t}: {e}[/yellow]")
@@ -250,9 +255,11 @@ def get_user_selections(preselected_tickers: list[str] | None = None):
         )
         anthropic_effort = ask_anthropic_effort()
 
+    first_ticker = selected_ticker if isinstance(selected_ticker, str) else selected_tickers[0]
     return {
-        "ticker": selected_ticker if isinstance(selected_ticker, str) else selected_tickers[0],
+        "ticker": first_ticker,
         "tickers": selected_tickers if isinstance(selected_ticker, list) else [selected_ticker],
+        "company_name": ticker_to_name.get(first_ticker, ""),
         "analysis_date": analysis_date,
         "analysts": selected_analysts,
         "research_depth": selected_research_depth,
@@ -898,8 +905,10 @@ def run_analysis(checkpoint: bool = False, selections: dict | None = None, holdi
 
     start_time = time.time()
 
-    # Create result directory
-    results_dir = Path(config["results_dir"]) / selections["ticker"] / selections["analysis_date"]
+    # Create result directory (named: 中文名称_股票代码)
+    company_name = selections.get("company_name", "")
+    ticker_dir_name = BatchRunner._build_ticker_dir_name(selections["ticker"], company_name)
+    results_dir = Path(config["results_dir"]) / ticker_dir_name / selections["analysis_date"]
     results_dir.mkdir(parents=True, exist_ok=True)
     report_dir = results_dir / "reports"
     report_dir.mkdir(parents=True, exist_ok=True)
@@ -1064,7 +1073,7 @@ def run_analysis(checkpoint: bool = False, selections: dict | None = None, holdi
     save_choice = typer.prompt("Save report?", default="Y").strip().upper()
     if save_choice in ("Y", "YES", ""):
         timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        default_path = Path.cwd() / "reports" / f"{selections['ticker']}_{timestamp}"
+        default_path = Path.cwd() / "reports" / f"{ticker_dir_name}_{timestamp}"
         save_path_str = typer.prompt(
             "Save path (press Enter for default)",
             default=str(default_path)
