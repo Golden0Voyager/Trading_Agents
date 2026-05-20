@@ -8,6 +8,7 @@ from tradingagents.agents.utils.agent_utils import (
     get_news,
     get_northbound_hold,
     get_restricted_release,
+    sanitize_company_name_in_report,
 )
 from tradingagents.dataflows.config import get_config
 
@@ -28,10 +29,15 @@ def create_governance_analyst(llm):
             get_northbound_hold,
         ]
 
+        company_name = state.get("company_name", "")
+        ticker = state["company_of_interest"]
+        company_line = f"Target company: {company_name} ({ticker}). " if company_name else ""
+
         system_message = (
+            company_line +
             "You are a Corporate Governance Analyst tasked with analyzing "
             "company announcements, shareholder changes, insider transactions, "
-            "and major corporate events for a specific company over the past week. "
+            "and major corporate events for the target company over the past week. "
             "Your objective is to write a comprehensive long report detailing your "
             "analysis, insights, and implications for traders and investors. "
             "Use the get_company_announcements tool for regulatory filings and notices, "
@@ -75,6 +81,10 @@ def create_governance_analyst(llm):
 
         if len(result.tool_calls) == 0:
             report = result.content
+
+        report = sanitize_company_name_in_report(
+            report, ticker, company_name
+        )
 
         return {
             "messages": [result],
