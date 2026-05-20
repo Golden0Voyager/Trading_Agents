@@ -37,6 +37,15 @@ class BaseLLMClient(ABC):
             return str(provider)
         return self.__class__.__name__.removesuffix("Client").lower()
 
+    def _require_model(self) -> None:
+        """Raise ValueError if model name is missing or empty."""
+        if not self.model:
+            raise ValueError(
+                f"[{self.get_provider_name()}] LLM model name is required but got "
+                f"'{self.model}'. Check your config: ensure 'deep_thinker' / "
+                f"'shallow_thinker' or 'deep_think_llm' / 'quick_think_llm' is set."
+            )
+
     def warn_if_unknown_model(self) -> None:
         """Warn when the model is outside the known list for the provider."""
         if self.validate_model():
