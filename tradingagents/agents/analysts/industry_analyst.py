@@ -3,6 +3,7 @@ from tradingagents.agents.utils.agent_utils import (
     build_instrument_context,
     get_industry_valuation,
     get_language_instruction,
+    sanitize_company_name_in_report,
 )
 from tradingagents.dataflows.config import get_config
 
@@ -10,15 +11,19 @@ from tradingagents.dataflows.config import get_config
 def create_industry_analyst(llm):
     def industry_analyst_node(state):
         current_date = state["trade_date"]
+        company_name = state.get("company_name", "")
+        ticker = state["company_of_interest"]
         instrument_context = build_instrument_context(
-            state["company_of_interest"], state.get("company_name", "")
+            ticker, company_name
         )
 
         tools = [
             get_industry_valuation,
         ]
 
+        company_line = f"Target company: {company_name} ({ticker}). " if company_name else ""
         system_message = (
+            company_line +
             "You are an Industry Analyst. Your job is to compare the target company's "
             "valuation (PE, PB, PS) against its industry peers and historical benchmarks. "
             "Use `get_industry_valuation` to fetch comparative data. Assess whether the "
@@ -58,6 +63,10 @@ def create_industry_analyst(llm):
 
         if len(result.tool_calls) == 0:
             report = result.content
+
+        report = sanitize_company_name_in_report(
+            report, ticker, company_name
+        )
 
         return {
             "messages": [result],
