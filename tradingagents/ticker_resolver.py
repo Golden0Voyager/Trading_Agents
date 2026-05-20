@@ -155,6 +155,28 @@ def _resolve_chinese_name(name: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def _fetch_company_name_from_db(ticker: str) -> Optional[str]:
+    """Query the local quant_core.db for the company name.
+
+    The stock_list table stores bare codes (e.g. '002241') without suffixes.
+    Returns None if the ticker is not found or the DB is unavailable.
+    """
+    db_path = os.path.expanduser("~/Code/data/quant_data/quant_core.db")
+    if not os.path.exists(db_path):
+        return None
+    bare = ticker.split(".")[0]
+    try:
+        import sqlite3
+        conn = sqlite3.connect(db_path, timeout=3)
+        row = conn.execute(
+            "SELECT name FROM stock_list WHERE code = ? LIMIT 1", (bare,)
+        ).fetchone()
+        conn.close()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
 def _fetch_company_name(ticker: str) -> Optional[str]:
     """Use yfinance to fetch the company's longName.
 
@@ -194,23 +216,23 @@ def resolve_ticker(user_input: str) -> dict[str, str]:
     )
     if suffix_match:
         ticker = suffix_match.group(1).upper()
-        company_name = _fetch_company_name(ticker) or ""
+        company_name = _fetch_company_name_from_db(ticker) or _fetch_company_name(ticker) or ""
         return {"ticker": ticker, "company_name": company_name}
 
     # 2. Pure numeric -> A-share suffix auto-append
     if _is_numeric_code(raw):
         ticker = _append_a_share_suffix(raw).upper()
-        company_name = _fetch_company_name(ticker) or ""
+        company_name = _fetch_company_name_from_db(ticker) or _fetch_company_name(ticker) or ""
         return {"ticker": ticker, "company_name": company_name}
 
     # 3. Contains Chinese characters -> resolve via akshare
     if re.search(r"[一-鿿]", raw):
         numeric_code = _resolve_chinese_name(raw)
         ticker = _append_a_share_suffix(numeric_code).upper()
-        company_name = _fetch_company_name(ticker) or ""
+        company_name = _fetch_company_name_from_db(ticker) or _fetch_company_name(ticker) or ""
         return {"ticker": ticker, "company_name": company_name}
 
     # 4. International ticker (e.g. AAPL, TSLA, BNS.TO)
     ticker = raw.upper()
-    company_name = _fetch_company_name(ticker) or ""
+    company_name = _fetch_company_name_from_db(ticker) or _fetch_company_name(ticker) or ""
     return {"ticker": ticker, "company_name": company_name}
