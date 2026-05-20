@@ -52,7 +52,12 @@ def build_instrument_context(ticker: str, company_name: str = "") -> str:
     """Describe the exact instrument so agents preserve exchange-qualified tickers."""
     ctx = f"The instrument to analyze is `{ticker}`. "
     if company_name:
-        ctx += f"The company name is {company_name}. "
+        ctx += (
+            f'The company name is "{company_name}". '
+            "CRITICAL: You MUST use this exact company name in your entire report. "
+            "Do NOT replace it with any other name, even if you believe your own knowledge is correct. "
+            f'If the company name is mentioned anywhere in your response, it must be "{company_name}" and nothing else. '
+        )
     ctx += (
         "Use this exact ticker in every tool call, report, and recommendation, "
         "preserving any exchange suffix (e.g. `.TO`, `.L`, `.HK`, `.T`, `.SS`, `.SZ`)."
