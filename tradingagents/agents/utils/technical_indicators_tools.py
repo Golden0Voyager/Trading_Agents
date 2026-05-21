@@ -28,6 +28,13 @@ def get_indicators(
     indicators = [i.strip().lower() for i in indicator.split(",") if i.strip()]
     results = []
     for ind in indicators:
+        if ind == "get_fund_flow":
+            results.append(
+                "Error: 'get_fund_flow' is a standalone tool, not a technical indicator. "
+                "Please call the 'get_fund_flow' tool directly with the 'ticker' parameter "
+                "instead of using 'get_indicators'."
+            )
+            continue
         try:
             results.append(route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days))
         except RuntimeError as e:

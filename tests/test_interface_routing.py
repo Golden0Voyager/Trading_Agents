@@ -25,8 +25,9 @@ class TestRouteToVendor:
 
     def test_us_share_keeps_yfinance(self):
         from tradingagents.dataflows import interface
+        from tradingagents.dataflows.akshare_common import AShareSymbolError
 
-        fake_ak = MagicMock(return_value="AKSHARE_RESULT")
+        fake_ak = MagicMock(side_effect=AShareSymbolError("Not an A-share ticker"))
         fake_yf = MagicMock(return_value="YFINANCE_RESULT")
         with patch.dict(
             interface.VENDOR_METHODS["get_fundamentals"],
@@ -37,7 +38,8 @@ class TestRouteToVendor:
                 "get_fundamentals", "AAPL", "2026-05-14"
             )
         assert result == "YFINANCE_RESULT"
-        fake_ak.assert_not_called()
+        fake_ak.assert_called_once()
+        fake_yf.assert_called_once()
 
     def test_a_share_falls_back_to_yfinance_on_rate_limit(self):
         from tradingagents.dataflows import interface
@@ -100,3 +102,17 @@ class TestRouteToVendor:
                 interface.route_to_vendor(
                     "get_indicators", "600519.SS", "rsi", "2026-05-14", 30
                 )
+
+    def test_get_indicators_intercepts_get_fund_flow(self):
+        """get_indicators tool should intercept get_fund_flow and return a clear redirection message."""
+        from tradingagents.agents.utils.technical_indicators_tools import get_indicators
+
+        result = get_indicators.invoke({
+            "symbol": "300454.SZ",
+            "indicator": "get_fund_flow",
+            "curr_date": "2026-05-14",
+            "look_back_days": 30
+        })
+        assert "standalone tool" in result
+        assert "get_fund_flow" in result
+

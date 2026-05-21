@@ -362,10 +362,15 @@ def render_header(
     parts = []
     if profile_name:
         parts.append(f"[bold]Batch:[/bold] {profile_name}")
-        parts.append(
+        # Show skipped count if available (BatchDashboard has .skipped)
+        skipped = getattr(dashboard, "skipped", 0)
+        progress_str = (
             f"{batch_completed}/{batch_total} "
             f"[green]✓[/green] {batch_failed}[red]✗[/red]"
         )
+        if skipped:
+            progress_str += f" {skipped}[cyan]⏭[/cyan]"
+        parts.append(progress_str)
         parts.append(f"Current: [cyan]{ticker}[/cyan]")
     else:
         parts.append(f"[bold]Ticker:[/bold] [cyan]{ticker}[/cyan]")

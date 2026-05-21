@@ -234,37 +234,86 @@ class BatchRunner:
             init_state["company_name"] = company_name
         args = graph.propagator.get_graph_args(callbacks=[stats_handler])
 
-        trace = []
-        processed_ids: set = set()
-        max_debate = config.get("max_debate_rounds", 1)
-        max_risk = config.get("max_risk_discuss_rounds", 1)
-
-        for chunk in graph.graph.stream(init_state, **args):
-            processed_ids = process_stream_chunk(
-                self.dashboard,
-                chunk,
-                max_debate_rounds=max_debate,
-                max_risk_rounds=max_risk,
-                processed_ids=processed_ids,
+        # ── Checkpoint / resume support ────────────────────────────
+        # When checkpoint is enabled, recompile the graph with a per-ticker
+        # SqliteSaver so a crashed / stuck run can resume from the last
+        # successful node instead of restarting from scratch.
+        checkpointer_ctx = None
+        if config.get("checkpoint_enabled"):
+            from tradingagents.graph.checkpointer import (
+                get_checkpointer,
+                checkpoint_step,
+                clear_checkpoint,
+                thread_id,
             )
-            self._refresh_display(stats_handler=stats_handler)
-            trace.append(chunk)
 
-        final_state = trace[-1] if trace else {}
+            checkpointer_ctx = get_checkpointer(
+                config["data_cache_dir"], resolved_ticker
+            )
+            saver = checkpointer_ctx.__enter__()
+            graph.graph = graph.workflow.compile(checkpointer=saver)
 
-        # Save report
-        ticker_dir_name = self._build_ticker_dir_name(ticker, company_name)
-        ticker_dir = self.output_dir / ticker_dir_name
-        ticker_dir.mkdir(parents=True, exist_ok=True)
-        save_report_to_disk(final_state, ticker, ticker_dir)
+            step = checkpoint_step(
+                config["data_cache_dir"], resolved_ticker, trade_date
+            )
+            if step is not None:
+                self.dashboard.add_message(
+                    "Resume",
+                    f"▶ Resuming {ticker} from checkpoint (step {step})",
+                )
+            else:
+                self.dashboard.add_message(
+                    "Info", f"Starting fresh analysis for {ticker}"
+                )
 
-        # Translation
-        if config.get("output_language") == "Chinese":
-            run_translation_pipeline(ticker_dir, config)
+            # Inject thread_id so the same ticker+date resumes correctly.
+            tid = thread_id(resolved_ticker, trade_date)
+            args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
 
-        # Extract summary
-        self._extract_summary(ticker, final_state)
-        return final_state
+        try:
+            trace = []
+            processed_ids: set = set()
+            max_debate = config.get("max_debate_rounds", 1)
+            max_risk = config.get("max_risk_discuss_rounds", 1)
+
+            for chunk in graph.graph.stream(init_state, **args):
+                processed_ids = process_stream_chunk(
+                    self.dashboard,
+                    chunk,
+                    max_debate_rounds=max_debate,
+                    max_risk_rounds=max_risk,
+                    processed_ids=processed_ids,
+                )
+                self._refresh_display(stats_handler=stats_handler)
+                trace.append(chunk)
+
+            final_state = trace[-1] if trace else {}
+
+            # Save report
+            ticker_dir_name = self._build_ticker_dir_name(ticker, company_name)
+            ticker_dir = self.output_dir / ticker_dir_name
+            ticker_dir.mkdir(parents=True, exist_ok=True)
+            save_report_to_disk(final_state, ticker, ticker_dir)
+
+            # Translation
+            if config.get("output_language") == "Chinese":
+                run_translation_pipeline(ticker_dir, config)
+
+            # Extract summary
+            self._extract_summary(ticker, final_state)
+
+            # Clear checkpoint on successful completion to avoid stale state.
+            if config.get("checkpoint_enabled"):
+                clear_checkpoint(
+                    config["data_cache_dir"], resolved_ticker, trade_date
+                )
+
+            return final_state
+        finally:
+            # Always close the checkpointer context and restore the plain graph.
+            if checkpointer_ctx is not None:
+                checkpointer_ctx.__exit__(None, None, None)
+                graph.graph = graph.workflow.compile()
 
     def _extract_summary(self, ticker: str, final_state: dict) -> None:
         """Extract portfolio decision for batch summary."""
@@ -310,6 +359,23 @@ class BatchRunner:
             for idx, ticker in enumerate(self.tickers):
                 if self._is_already_completed(ticker):
                     self.completed_tickers.add(ticker)
+                    self.dashboard.mark_skipped(ticker)
+                    self.dashboard.add_message("Skip", f"⏭ {ticker} — report already exists, skipping")
+                    self.dashboard.update_progress(
+                        ticker,
+                        len(self.completed_tickers) - len(self.failures),
+                        len(self.failures),
+                    )
+                    update_dashboard_display(
+                        layout,
+                        self.dashboard,
+                        ticker=self.dashboard.current_ticker or ticker,
+                        start_time=start_time,
+                        batch_completed=len(self.completed_tickers) - len(self.failures),
+                        batch_total=self.dashboard.total,
+                        batch_failed=len(self.failures),
+                        profile_name=self.dashboard.profile_name,
+                    )
                     continue
 
                 self.dashboard.reset_for_next_stock()
