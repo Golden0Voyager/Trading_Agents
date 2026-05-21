@@ -76,3 +76,17 @@ Audit: `python scripts/report_auditor.py reports/batch_YYYYMMDD_HHMMSS`
 - `deepseek-reasoner` does not support `tool_choice`; `with_structured_output` raises `NotImplementedError` → falls back to free text.
 - All file I/O uses `encoding="utf-8"`.
 - Env: `.env` (copied from `.env.example`) + optional `.env.enterprise`.
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked as local markdown files under `.scratch/<feature>/` in this repo. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+The canonical triage labels use their default names: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
