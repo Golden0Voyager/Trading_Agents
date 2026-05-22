@@ -2,264 +2,150 @@
   <img src="assets/TauricResearch.png" style="width: 60%; height: auto;">
 </p>
 
-<div align="center" style="line-height: 1;">
-  <a href="https://arxiv.org/abs/2412.20138" target="_blank"><img alt="arXiv" src="https://img.shields.io/badge/arXiv-2412.20138-B31B1B?logo=arxiv"/></a>
-  <a href="https://discord.com/invite/hk9PGKShPK" target="_blank"><img alt="Discord" src="https://img.shields.io/badge/Discord-TradingResearch-7289da?logo=discord&logoColor=white&color=7289da"/></a>
-  <a href="./assets/wechat.png" target="_blank"><img alt="WeChat" src="https://img.shields.io/badge/WeChat-TauricResearch-brightgreen?logo=wechat&logoColor=white"/></a>
-  <a href="https://x.com/TauricResearch" target="_blank"><img alt="X Follow" src="https://img.shields.io/badge/X-TauricResearch-white?logo=x&logoColor=white"/></a>
-  <br>
-  <a href="https://github.com/TauricResearch/" target="_blank"><img alt="Community" src="https://img.shields.io/badge/Join_GitHub_Community-TauricResearch-14C290?logo=discourse"/></a>
-</div>
+# Trading-Agents-A-Share: Optimized Multi-Agent LLM Financial Trading Framework for China A-Share Market
 
-<div align="center">
-  <!-- Keep these links. Translations will automatically update with the README. -->
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=de">Deutsch</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=es">Español</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=fr">français</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ja">日本語</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ko">한국어</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=pt">Português</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=ru">Русский</a> | 
-  <a href="https://www.readme-i18n.com/TauricResearch/TradingAgents?lang=zh">中文</a>
-</div>
+[![A-Share Optimized](https://img.shields.io/badge/A--Share-Optimized-10B981?style=for-the-badge&logo=chinanet&logoColor=white)](#-key-a-share--production-enhancements)
+[![LangGraph](https://img.shields.io/badge/Orchestration-LangGraph-6366F1?style=for-the-badge&logo=chainlink&logoColor=white)](https://github.com/langchain-ai/langgraph)
+[![arXiv](https://img.shields.io/badge/arXiv-2412.20138-B31B1B?style=for-the-badge&logo=arxiv)](https://arxiv.org/abs/2412.20138)
+[![License](https://img.shields.io/badge/License-MIT-374151?style=for-the-badge)](LICENSE)
+
+`Trading-Agents-A-Share` is a highly optimized, production-grade customized fork of **TradingAgents** (the state-of-the-art multi-agent financial trading framework originally published by Tauric Research on NeurIPS/arXiv). 
+
+This fork is specifically tailored to address the unique market dynamics, data feeds, and local execution challenges of the **China A-Share (沪深京) Stock Market**, making it a robust platform for domestic quantitative AI research.
 
 ---
 
-# TradingAgents: Multi-Agents LLM Financial Trading Framework
+## 🚀 Key A-Share & Production Enhancements
+*Below are the core engineering enhancements and optimizations introduced in this fork to adapt the original framework for domestic A-Share trading:*
 
-## News
-- [2026-04] **TradingAgents v0.2.4** released with structured-output agents (Research Manager, Trader, Portfolio Manager), LangGraph checkpoint resume, persistent decision log, DeepSeek/Qwen/GLM/Azure provider support, Docker, and a Windows UTF-8 encoding fix. See [CHANGELOG.md](CHANGELOG.md) for the full list.
-- [2026-03] **TradingAgents v0.2.3** released with multi-language support, GPT-5.4 family models, unified model catalog, backtesting date fidelity, and proxy support.
-- [2026-03] **TradingAgents v0.2.2** released with GPT-5.4/Gemini 3.1/Claude 4.6 model coverage, five-tier rating scale, OpenAI Responses API, Anthropic effort control, and cross-platform stability.
-- [2026-02] **TradingAgents v0.2.0** released with multi-provider LLM support (GPT-5.x, Gemini 3.x, Claude 4.x, Grok 4.x) and improved system architecture.
-- [2026-01] **Trading-R1** [Technical Report](https://arxiv.org/abs/2509.11420) released, with [Terminal](https://github.com/TauricResearch/Trading-R1) expected to land soon.
+### 1. 📊 A-Share Institutional Fund Flow Integration (`get_fund_flow` Routing)
+* **The Optimization**: Integrated custom routing logic to ingest domestic institutional "Smart Money" (主力资金、北向资金、大单流向) flow feeds.
+* **Why it matters**: In the China A-Share market, retail-heavy sentiment and institutional capital tracking are extremely strong price-driving signals. This integration adds a crucial metric to the News/Sentiment Analyst agents.
 
-<div align="center">
-<a href="https://www.star-history.com/#TauricResearch/TradingAgents&Date">
- <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=TauricResearch/TradingAgents&type=Date&theme=dark" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/svg?repos=TauricResearch/TradingAgents&type=Date" />
-   <img alt="TradingAgents Star History" src="https://api.star-history.com/svg?repos=TauricResearch/TradingAgents&type=Date" style="width: 80%; height: auto;" />
- </picture>
-</a>
-</div>
+### 2. ⚡ Actionable Trading Signal Enforcement (Entry/Stop/Size Constraints)
+* **The Optimization**: Enforced a strict structured schema in the **Trader Agent**'s decision module, requiring it to emit precise values for **Entry Price (建仓点)**, **Stop-Loss (止损点)**, and **Position Size (仓位比例)** in every proposed trade.
+* **Why it matters**: Moves the multi-agent system from abstract, qualitative investment debates ("bullish/bearish") into concrete, actionable, and testable trade execution orders.
 
-> 🎉 **TradingAgents** officially released! We have received numerous inquiries about the work, and we would like to express our thanks for the enthusiasm in our community.
->
-> So we decided to fully open-source the framework. Looking forward to building impactful projects with you!
+### 3. 🛡️ SOE & Local Anti-Hallucination Context Sanitizer
+* **The Optimization**: Implemented global company-name context injection and post-execution regex filtering across critical analyst roles (Industry Analyst, Governance Analyst).
+* **Why it matters**: LLMs frequently hallucinate complex Chinese State-Owned Enterprise (SOE) titles, stock symbols, and localized acronyms. This sanitizer ensures 100% data sanity before any report is written to disk.
 
-<div align="center">
+### 4. 🇨🇳 Local LLM Native Validation & Standardized Clients
+* **The Optimization**: Hardened validation clients for cost-efficient Chinese domestic LLMs, specifically supporting **Qwen (Alibaba DashScope)**, **GLM (Zhipu)**, and **DeepSeek-R1** endpoints.
+* **Why it matters**: Standardizes the routing and parsing rules for domestic reasoning models, enabling high-performance local inference at a fraction of the cost of western APIs.
 
-🚀 [TradingAgents](#tradingagents-framework) | ⚡ [Installation & CLI](#installation-and-cli) | 🎬 [Demo](https://www.youtube.com/watch?v=90gr5lwjIho) | 📦 [Package Usage](#tradingagents-package) | 🤝 [Contributing](#contributing) | 📄 [Citation](#citation)
+### 5. ⏳ TUI & Batch Checkpoint Resume
+* **The Optimization**: Optimized command-line shell script behaviors to support bulk TUI backtests and robust state recovery through a unified SQLite cache.
+* **Why it matters**: Long backtesting sessions over multiple A-share stocks are vulnerable to API failures. This recovery pipeline ensures interrupted tasks resume seamlessly from the last successful step.
 
-</div>
+---
 
-## TradingAgents Framework
+## 🏛️ TradingAgents Framework Overview
 
-TradingAgents is a multi-agent trading framework that mirrors the dynamics of real-world trading firms. By deploying specialized LLM-powered agents: from fundamental analysts, sentiment experts, and technical analysts, to trader, risk management team, the platform collaboratively evaluates market conditions and informs trading decisions. Moreover, these agents engage in dynamic discussions to pinpoint the optimal strategy.
+The core architecture mimics the hierarchy of professional asset management firms. Under a unified state machine managed by **LangGraph**, specialized LLM agents debate, critique, and authorize trading decisions:
 
-<p align="center">
-  <img src="assets/schema.png" style="width: 100%; height: auto;">
-</p>
+```
+                  ┌────────────────────────┐
+                  │   Fundamental Analyst  │
+                  └───────────┬────────────┘
+                              ▼
+┌──────────────┐  ┌────────────────────────┐  ┌──────────────┐
+│ Technical    ├─►│    Research Managers   │◄─┤ News & Fund  │
+│ Analyst      │  │   (Bull & Bear Debate) │  │ Flow Analyst │
+└──────────────┘  └───────────┬────────────┘  └──────────────┘
+                              ▼
+                  ┌────────────────────────┐
+                  │      Trader Agent      │
+                  │ (Concrete Price/Size)  │
+                  └───────────┬────────────┘
+                              ▼
+                  ┌────────────────────────┐
+                  │     Risk & Portfolio   │
+                  │         Manager        │
+                  └────────────────────────┘
+```
 
-> TradingAgents framework is designed for research purposes. Trading performance may vary based on many factors, including the chosen backbone language models, model temperature, trading periods, the quality of data, and other non-deterministic factors. [It is not intended as financial, investment, or trading advice.](https://tauric.ai/disclaimer/)
+* **Analyst Team**: Fundamental Analyst (evaluates balance sheets), Technical Analyst (MACD, RSI indicators), News & Fund Flow Analyst (monitors domestic news and主力资金 flow).
+* **Research Team**: Bullish and Bearish Research Managers who debate the analysts' outputs to balance upside potential against inherent localized market risks.
+* **Trader Agent**: Combines the synthesized reports to formulate trade proposals (Entry, Stop-Loss, and Sizing).
+* **Risk & Portfolio Manager**: Executes risk checks against overall portfolio volatility and approves/rejects the final transaction before writing it to the simulated exchange.
 
-Our framework decomposes complex trading tasks into specialized roles. This ensures the system achieves a robust, scalable approach to market analysis and decision-making.
+---
 
-### Analyst Team
-- Fundamentals Analyst: Evaluates company financials and performance metrics, identifying intrinsic values and potential red flags.
-- Sentiment Analyst: Analyzes social media and public sentiment using sentiment scoring algorithms to gauge short-term market mood.
-- News Analyst: Monitors global news and macroeconomic indicators, interpreting the impact of events on market conditions.
-- Technical Analyst: Utilizes technical indicators (like MACD and RSI) to detect trading patterns and forecast price movements.
-
-<p align="center">
-  <img src="assets/analyst.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-### Researcher Team
-- Comprises both bullish and bearish researchers who critically assess the insights provided by the Analyst Team. Through structured debates, they balance potential gains against inherent risks.
-
-<p align="center">
-  <img src="assets/researcher.png" width="70%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-### Trader Agent
-- Composes reports from the analysts and researchers to make informed trading decisions. It determines the timing and magnitude of trades based on comprehensive market insights.
-
-<p align="center">
-  <img src="assets/trader.png" width="70%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-### Risk Management and Portfolio Manager
-- Continuously evaluates portfolio risk by assessing market volatility, liquidity, and other risk factors. The risk management team evaluates and adjusts trading strategies, providing assessment reports to the Portfolio Manager for final decision.
-- The Portfolio Manager approves/rejects the transaction proposal. If approved, the order will be sent to the simulated exchange and executed.
-
-<p align="center">
-  <img src="assets/risk.png" width="70%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-## Installation and CLI
+## ⚡ Installation & CLI
 
 ### Installation
 
-Clone TradingAgents:
+Clone the repository:
 ```bash
-git clone https://github.com/TauricResearch/TradingAgents.git
-cd TradingAgents
+git clone https://github.com/Golden0Voyager/Trading-Agents-A-Share.git
+cd Trading-Agents-A-Share
 ```
 
-Create a virtual environment in any of your favorite environment managers:
+Create a virtual environment:
 ```bash
-conda create -n tradingagents python=3.13
-conda activate tradingagents
+conda create -n tradingagents-env python=3.13
+conda activate tradingagents-env
 ```
 
-Install the package and its dependencies:
+Install the package in editable mode:
 ```bash
-pip install .
+pip install -e .
 ```
 
-### Docker
+### Config Environment Variables
 
-Alternatively, run with Docker:
-```bash
-cp .env.example .env  # add your API keys
-docker compose run --rm tradingagents
-```
-
-For local models with Ollama:
-```bash
-docker compose --profile ollama run --rm tradingagents-ollama
-```
-
-### Required APIs
-
-TradingAgents supports multiple LLM providers. Set the API key for your chosen provider:
-
-```bash
-export OPENAI_API_KEY=...          # OpenAI (GPT)
-export GOOGLE_API_KEY=...          # Google (Gemini)
-export ANTHROPIC_API_KEY=...       # Anthropic (Claude)
-export XAI_API_KEY=...             # xAI (Grok)
-export DEEPSEEK_API_KEY=...        # DeepSeek
-export DASHSCOPE_API_KEY=...       # Qwen (Alibaba DashScope)
-export ZHIPU_API_KEY=...           # GLM (Zhipu)
-export OPENROUTER_API_KEY=...      # OpenRouter
-export SENSENOVA_API_KEY=...       # 商汤 SenseNova (DeepSeek-V3-1 / DeepSeek-R1)
-export ALPHA_VANTAGE_API_KEY=...   # Alpha Vantage
-```
-
-For enterprise providers (e.g. Azure OpenAI, AWS Bedrock), copy `.env.enterprise.example` to `.env.enterprise` and fill in your credentials.
-
-For local models, configure Ollama with `llm_provider: "ollama"` in your config.
-
-Alternatively, copy `.env.example` to `.env` and fill in your keys:
+Copy `.env.example` to `.env` and fill in your API credentials:
 ```bash
 cp .env.example .env
 ```
 
-### CLI Usage
-
-Launch the interactive CLI:
+Support for major domestic and international providers:
 ```bash
-tradingagents          # installed command
-python -m cli.main     # alternative: run directly from source
-```
-You will see a screen where you can select your desired tickers, analysis date, LLM provider, research depth, and more.
-
-<p align="center">
-  <img src="assets/cli/cli_init.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-An interface will appear showing results as they load, letting you track the agent's progress as it runs.
-
-<p align="center">
-  <img src="assets/cli/cli_news.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-<p align="center">
-  <img src="assets/cli/cli_transaction.png" width="100%" style="display: inline-block; margin: 0 2%;">
-</p>
-
-## TradingAgents Package
-
-### Implementation Details
-
-We built TradingAgents with LangGraph to ensure flexibility and modularity. The framework supports multiple LLM providers: OpenAI, Google, Anthropic, xAI, DeepSeek, Qwen (Alibaba DashScope), GLM (Zhipu), OpenRouter, Ollama for local models, and Azure OpenAI for enterprise.
-
-### Python Usage
-
-To use TradingAgents inside your code, you can import the `tradingagents` module and initialize a `TradingAgentsGraph()` object. The `.propagate()` function will return a decision. You can run `main.py`, here's also a quick example:
-
-```python
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
-
-ta = TradingAgentsGraph(debug=True, config=DEFAULT_CONFIG.copy())
-
-# forward propagate
-_, decision = ta.propagate("NVDA", "2026-01-15")
-print(decision)
+export DASHSCOPE_API_KEY=...       # Qwen (Alibaba DashScope)
+export ZHIPU_API_KEY=...           # GLM (Zhipu)
+export DEEPSEEK_API_KEY=...        # DeepSeek
+export SENSENOVA_API_KEY=...       # SenseNova (DeepSeek-R1)
+export OPENAI_API_KEY=...          # OpenAI (GPT-4o)
+export ANTHROPIC_API_KEY=...       # Anthropic (Claude)
 ```
 
-You can also adjust the default configuration to set your own choice of LLMs, debate rounds, etc.
+---
 
-```python
-from tradingagents.graph.trading_graph import TradingAgentsGraph
-from tradingagents.default_config import DEFAULT_CONFIG
+## 📈 CLI Usage & Backtesting
 
-config = DEFAULT_CONFIG.copy()
-config["llm_provider"] = "openai"        # openai, google, anthropic, xai, deepseek, qwen, glm, openrouter, ollama, azure
-config["deep_think_llm"] = "gpt-5.4"     # Model for complex reasoning
-config["quick_think_llm"] = "gpt-5.4-mini" # Model for quick tasks
-config["max_debate_rounds"] = 2
-
-ta = TradingAgentsGraph(debug=True, config=config)
-_, decision = ta.propagate("NVDA", "2026-01-15")
-print(decision)
-```
-
-See `tradingagents/default_config.py` for all configuration options.
-
-## Persistence and Recovery
-
-TradingAgents persists two kinds of state across runs.
-
-### Decision log
-
-The decision log is always on. Each completed run appends its decision to `~/.tradingagents/memory/trading_memory.md`. On the next run for the same ticker, TradingAgents fetches the realised return (raw and alpha vs SPY), generates a one-paragraph reflection, and injects the most recent same-ticker decisions plus recent cross-ticker lessons into the Portfolio Manager prompt, so each analysis carries forward what worked and what didn't.
-
-Override the path with `TRADINGAGENTS_MEMORY_LOG_PATH`.
-
-### Checkpoint resume
-
-Checkpoint resume is opt-in via `--checkpoint`. When enabled, LangGraph saves state after each node so a crashed or interrupted run resumes from the last successful step instead of starting over. On a resume run you will see `Resuming from step N for <TICKER> on <date>` in the logs; on a new run you will see `Starting fresh`. Checkpoints are cleared automatically on successful completion.
-
-Per-ticker SQLite databases live at `~/.tradingagents/cache/checkpoints/<TICKER>.db` (override the base with `TRADINGAGENTS_CACHE_DIR`). Use `--clear-checkpoints` to reset all of them before a run.
-
+Launch the interactive Terminal User Interface (TUI):
 ```bash
-tradingagents analyze --checkpoint           # enable for this run
-tradingagents analyze --clear-checkpoints    # reset before running
+tradingagents
+# Or run directly from source:
+python -m cli.main
 ```
 
-```python
-config = DEFAULT_CONFIG.copy()
-config["checkpoint_enabled"] = True
-ta = TradingAgentsGraph(config=config)
-_, decision = ta.propagate("NVDA", "2026-01-15")
+### Batch Mode & Checkpoint Resume
+
+To run high-volume backtests with automated SQLite session persistence:
+```bash
+# Run with active checkpoint tracking
+tradingagents analyze --checkpoint
+
+# Reset cached states before starting
+tradingagents analyze --clear-checkpoints
 ```
 
-## Contributing
+Decisions are persistently logged into `~/.tradingagents/memory/trading_memory.md`, which the Portfolio Manager automatically reviews on subsequent runs for historical reflection.
 
-We welcome contributions from the community! Whether it's fixing a bug, improving documentation, or suggesting a new feature, your input helps make this project better. If you are interested in this line of research, please consider joining our open-source financial AI research community [Tauric Research](https://tauric.ai/).
+---
 
-Past contributions, including code, design feedback, and bug reports, are credited per release in [`CHANGELOG.md`](CHANGELOG.md).
+## 🤝 Contribution & License
+This project is open-source under the [MIT License](LICENSE).
+We welcome contributions to further enhance A-Share localizations (e.g., adding local technical indicators, refining DeepSeek reasoning prompts, or writing new data ingestion connectors).
 
-## Citation
+---
 
-Please reference our work if you find *TradingAgents* provides you with some help :)
+## 📄 Academic Citation
+If you find this framework useful in your financial AI or quantitative research, please cite the original foundational work:
 
-```
+```bibtex
 @misc{xiao2025tradingagentsmultiagentsllmfinancial,
       title={TradingAgents: Multi-Agents LLM Financial Trading Framework}, 
       author={Yijia Xiao and Edward Sun and Di Luo and Wei Wang},
