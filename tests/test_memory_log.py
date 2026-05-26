@@ -1,6 +1,7 @@
 """Tests for TradingMemoryLog — storage, deferred reflection, PM injection, legacy removal."""
 
 import pytest
+import threading
 import pandas as pd
 from unittest.mock import MagicMock, patch
 
@@ -771,3 +772,98 @@ class TestLegacyRemoval:
         assert len(entries) == 1
         assert entries[0]["ticker"] == "NVDA"
         assert entries[0]["pending"] is True
+
+
+# ---------------------------------------------------------------------------
+# Concurrent safety: thread-level parallelism
+# ---------------------------------------------------------------------------
+
+class TestConcurrentMemoryLog:
+
+    def test_concurrent_store_decision_no_corruption(self, tmp_path):
+        """Multiple threads appending simultaneously must not lose or interleave entries."""
+        log = make_log(tmp_path)
+        tickers = [f"T{i}" for i in range(10)]
+
+        def worker(ticker):
+            log.store_decision(ticker, "2026-01-10", DECISION_BUY)
+
+        threads = [threading.Thread(target=worker, args=(t,)) for t in tickers]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        entries = log.load_entries()
+        assert len(entries) == 10
+        found_tickers = {e["ticker"] for e in entries}
+        assert found_tickers == set(tickers)
+        # Verify file structure is intact (no broken separators)
+        raw = (tmp_path / "trading_memory.md").read_text(encoding="utf-8")
+        assert raw.count("<!-- ENTRY_END -->") == 10
+
+    def test_concurrent_batch_update_no_lost_writes(self, tmp_path):
+        """Concurrent batch_update_with_outcomes must resolve all entries without Last-Write-Wins loss."""
+        log = make_log(tmp_path)
+        tickers = [f"T{i}" for i in range(5)]
+        for t in tickers:
+            log.store_decision(t, "2026-01-10", DECISION_BUY)
+
+        # Each thread resolves a single ticker
+        def worker(ticker, idx):
+            log.batch_update_with_outcomes([
+                {
+                    "ticker": ticker,
+                    "trade_date": "2026-01-10",
+                    "raw_return": 0.01 * idx,
+                    "alpha_return": 0.005 * idx,
+                    "holding_days": 5,
+                    "reflection": f"Correct {ticker}.",
+                }
+            ])
+
+        threads = [threading.Thread(target=worker, args=(t, i)) for i, t in enumerate(tickers)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        entries = log.load_entries()
+        assert len(entries) == 5
+        assert all(not e["pending"] for e in entries)
+        reflections = {e["reflection"] for e in entries}
+        expected = {f"Correct {t}." for t in tickers}
+        assert reflections == expected
+
+    def test_concurrent_mixed_store_and_update(self, tmp_path):
+        """Interleaved store_decision and update_with_outcome calls must remain consistent."""
+        log = make_log(tmp_path)
+        tickers = [f"T{i}" for i in range(5)]
+
+        def store_worker(ticker):
+            log.store_decision(ticker, "2026-01-10", DECISION_BUY)
+
+        def update_worker(ticker):
+            # Small retry window so updates that arrive before the store can retry
+            for _ in range(10):
+                log.update_with_outcome(ticker, "2026-01-10", 0.05, 0.02, 5, "Good call.")
+                if not any(e["pending"] for e in log.load_entries() if e["ticker"] == ticker):
+                    break
+                import time
+                time.sleep(0.01)
+
+        store_threads = [threading.Thread(target=store_worker, args=(t,)) for t in tickers]
+        update_threads = [threading.Thread(target=update_worker, args=(t,)) for t in tickers]
+        for t in store_threads:
+            t.start()
+        for t in update_threads:
+            t.start()
+        for t in store_threads:
+            t.join()
+        for t in update_threads:
+            t.join()
+
+        entries = log.load_entries()
+        assert len(entries) == 5
+        # All entries should eventually be resolved
+        assert all(not e["pending"] for e in entries)
