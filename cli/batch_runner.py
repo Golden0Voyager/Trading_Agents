@@ -339,44 +339,67 @@ class BatchRunner:
         ``评级：减持`` or ``止损价 24.30``.
         """
         import re
+
         decision = final_state.get("final_trade_decision", "")
         company = final_state.get("company_name", "")
 
-        # Rating — English keys or Chinese equivalents (评级 / 建议)
-        rating_match = re.search(
+        def _find(names: str) -> str:
+            """Try key-value format first, then markdown table format."""
+            # Key-value: 入场价: 187.00
+            m = re.search(
+                rf"(?:\*\*)?(?:{names})(?:\*\*)?\s*[:：]\s*(?:\*\*)?([^\n]+?)(?:\*\*)?",
+                decision,
+                re.IGNORECASE,
+            )
+            if m:
+                return m.group(1).strip()
+            # Table: | 入场价 | 187.00元 |
+            m = re.search(
+                rf"(?:^|\|)\s*(?:\*\*)?(?:{names})(?:\*\*)?\s*\|\s*([^|\n]+?)\s*(?:\||$)",
+                decision,
+                re.IGNORECASE | re.MULTILINE,
+            )
+            return m.group(1).strip() if m else ""
+
+        # Rating — key-value or quoted like 「持有」评级
+        rating_raw = ""
+        rating_m = re.search(
             r"(?:\*\*)?(?:Rating|Decision|评级|建议)(?:\*\*)?\s*[:：]\s*(?:\*\*)?([\w一-鿿]+)(?:\*\*)?",
-            decision, re.IGNORECASE,
+            decision,
+            re.IGNORECASE,
         )
+        if rating_m:
+            rating_raw = rating_m.group(1)
+        else:
+            rating_m = re.search(
+                r"[\"「【]([\w一-鿿]+)[\"」】]\s*(?:评级|建议)",
+                decision,
+                re.IGNORECASE,
+            )
+            if rating_m:
+                rating_raw = rating_m.group(1)
 
-        # Entry — English "Entry" or Chinese "入场价 / 买入价 / 目标价"
-        entry_match = re.search(
-            r"(?:\*\*)?(?:Entry|entry_price|入场价|买入价|目标价)(?:\*\*)?\s*[:：]?\s*(?:\*\*)?([\d\-.—]+)(?:\*\*)?",
-            decision, re.IGNORECASE,
-        )
-
-        # Stop — English "Stop" or Chinese "止损价 / 止损"
-        stop_match = re.search(
-            r"(?:\*\*)?(?:Stop|stop_loss|止损价|止损线|止损)(?:\*\*)?\s*[:：]?\s*(?:\*\*)?([\d\-.—]+)(?:\*\*)?",
-            decision, re.IGNORECASE,
-        )
-
-        # Size — English "Size" or Chinese "仓位 / 持仓 / 仓位占比"
-        size_match = re.search(
-            r"(?:\*\*)?(?:Size|position_size|position_sizing|仓位|持仓|持仓比例|仓位占比)(?:\*\*)?\s*[:：]?\s*(?:\*\*)?([\d.%—]+)(?:\*\*)?",
-            decision, re.IGNORECASE,
-        )
-
-        rating_raw = rating_match.group(1) if rating_match else ""
-        # Normalize Chinese ratings through the same mapper memory log uses
         from tradingagents.agents.utils.rating import parse_rating
+
         rating = parse_rating(rating_raw) if rating_raw else "—"
+
+        entry = _find(r"Entry|entry_price|入场价|买入价|目标价")
+        stop = _find(r"Stop|stop_loss|止损价|止损线|止损")
+        size = _find(r"Size|position_size|position_sizing|仓位上限|仓位|持仓|持仓比例|仓位占比")
+
+        def _clean(val: str) -> str:
+            if not val:
+                return val
+            val = re.sub(r"^[≤≥~≈]\s*", "", val)
+            val = re.sub(r"\s*[元%\s]+$", "", val)
+            return val.strip()
 
         self.summaries[ticker] = {
             "company": company or ticker,
             "rating": rating,
-            "entry": entry_match.group(1) if entry_match else "—",
-            "stop": stop_match.group(1) if stop_match else "—",
-            "size": size_match.group(1) if size_match else "—",
+            "entry": _clean(entry) or "—",
+            "stop": _clean(stop) or "—",
+            "size": _clean(size) or "—",
         }
 
     def run(self) -> None:
