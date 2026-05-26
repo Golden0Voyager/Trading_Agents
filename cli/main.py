@@ -1131,7 +1131,7 @@ def run_analysis(checkpoint: bool = False, selections: dict | None = None, holdi
         pass
 
 
-def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: bool = False, output_dir: Optional[Path] = None, watchlist_name: Optional[str] = None, holdings: dict | None = None):
+def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: bool = False, output_dir: Optional[Path] = None, watchlist_name: Optional[str] = None, holdings: dict | None = None, workers: int = 1):
     """Run unattended batch analysis for multiple tickers."""
     date_stamp = __import__("datetime").datetime.now().strftime("%Y%m%d")
     if output_dir is None:
@@ -1147,6 +1147,7 @@ def run_batch_analysis(tickers: list[str], profile_config: dict, checkpoint: boo
         output_dir=output_dir,
         checkpoint=checkpoint,
         holdings=holdings,
+        workers=workers,
     )
     runner.run()
 
@@ -1239,6 +1240,12 @@ def analyze(
         "--sync-holdings",
         help="Sync holdings from Google Sheet to local cache before analysis.",
     ),
+    workers: int = typer.Option(
+        1,
+        "--workers",
+        "-w",
+        help="Number of concurrent workers for batch analysis (default: 1). Values > 1 disable the live dashboard.",
+    ),
 ):
     if clear_checkpoints:
         from tradingagents.graph.checkpointer import clear_all_checkpoints
@@ -1291,6 +1298,7 @@ def analyze(
             output_dir=Path(output_dir) if output_dir else None,
             watchlist_name=watchlist,
             holdings=holdings,
+            workers=workers,
         )
         return
 
@@ -1328,9 +1336,9 @@ def analyze(
                 run_analysis(checkpoint=checkpoint, selections=selections, holdings=holdings)
             else:
                 # User selected an existing profile — use batch flow with a single ticker
-                run_batch_analysis([ticker_list[0]], profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name, holdings=holdings)
+                run_batch_analysis([ticker_list[0]], profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name, holdings=holdings, workers=workers)
         else:
-            run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name, holdings=holdings)
+            run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name, holdings=holdings, workers=workers)
     else:
         # Single / custom mode
         selections = get_user_selections()
@@ -1349,7 +1357,7 @@ def analyze(
                 "anthropic_effort": selections.get("anthropic_effort"),
                 "output_language": selections.get("output_language", "English"),
             }
-            run_batch_analysis(tickers, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, holdings=holdings)
+            run_batch_analysis(tickers, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, holdings=holdings, workers=workers)
         else:
             run_analysis(checkpoint=checkpoint, selections=selections, holdings=holdings)
 
@@ -1641,6 +1649,7 @@ def default(ctx: typer.Context):
             holdings_sheet=None,
             holdings_worksheet="total",
             sync_holdings=False,
+            workers=1,
         )
 
 
