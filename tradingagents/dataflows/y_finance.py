@@ -19,7 +19,8 @@ def get_YFin_data_online(
         ticker = yf.Ticker(symbol.upper())
 
         # Fetch historical data for the specified date range
-        data = yf_retry(lambda: ticker.history(start=start_date, end=end_date))
+        # .copy() required since yfinance 1.2.0 returns consolidated (read-only) DataFrames
+        data = yf_retry(lambda: ticker.history(start=start_date, end=end_date)).copy()
 
         # Check if data is empty
         if data.empty:
@@ -200,7 +201,7 @@ def _get_stock_stats_bulk(
     from stockstats import wrap
 
     data = load_ohlcv(symbol, curr_date)
-    df = wrap(data)
+    df = wrap(data).copy()
     df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
     
     # Calculate the indicator for all rows at once
