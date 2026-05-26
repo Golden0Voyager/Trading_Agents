@@ -5,7 +5,9 @@ import os
 os.environ["TQDM_DISABLE"] = "1"
 
 import json
+import threading
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -31,12 +33,14 @@ class BatchRunner:
         output_dir: Path,
         checkpoint: bool = False,
         holdings: dict | None = None,
+        workers: int = 1,
     ):
         self.tickers = tickers
         self.profile_config = profile_config
         self.output_dir = Path(output_dir)
         self.checkpoint = checkpoint
         self.holdings = self._resolve_holdings(holdings)
+        self.workers = workers
         self.completed_tickers: set[str] = set()
         self.failures: dict[str, str] = {}
         self.summaries: dict[str, dict] = {}
@@ -45,6 +49,8 @@ class BatchRunner:
         # them. When unset (e.g. tests calling _run_single directly), refresh is a no-op.
         self._layout = None
         self._start_time: Optional[float] = None
+        # Protect shared mutable state across worker threads
+        self._lock = threading.Lock()
 
     def _refresh_display(self, stats_handler=None) -> None:
         """Push current dashboard state into the Live-managed layout.
@@ -299,8 +305,9 @@ class BatchRunner:
             if config.get("output_language") == "Chinese":
                 run_translation_pipeline(ticker_dir, config)
 
-            # Extract summary
-            self._extract_summary(ticker, final_state)
+            # Extract summary (lock-protected for concurrent batch mode)
+            with self._lock:
+                self._extract_summary(ticker, final_state)
 
             # Clear checkpoint on successful completion to avoid stale state.
             if config.get("checkpoint_enabled"):
@@ -316,18 +323,49 @@ class BatchRunner:
                 graph.graph = graph.workflow.compile()
 
     def _extract_summary(self, ticker: str, final_state: dict) -> None:
-        """Extract portfolio decision for batch summary."""
+        """Extract portfolio decision for batch summary.
+
+        Supports both English (structured-output) and Chinese (free-text fallback)
+        decision formats. When the LLM falls back to free text because the provider
+        lacks structured-output support, the prose may use Chinese labels such as
+        ``评级：减持`` or ``止损价 24.30``.
+        """
         import re
         decision = final_state.get("final_trade_decision", "")
         company = final_state.get("company_name", "")
-        rating_match = re.search(r"(?:\*\*)?(?:Rating|Decision)(?:\*\*)?\s*[:：]\s*(\w+)", decision, re.IGNORECASE)
-        entry_match = re.search(r"(?:\*\*)?Entry(?:\*\*)?\s*[:：]\s*([\d\-.—]+)", decision, re.IGNORECASE)
-        stop_match = re.search(r"(?:\*\*)?Stop(?:\*\*)?\s*[:：]\s*([\d\-.—]+)", decision, re.IGNORECASE)
-        size_match = re.search(r"(?:\*\*)?Size(?:\*\*)?\s*[:：]\s*([\d.%—]+)", decision, re.IGNORECASE)
+
+        # Rating — English keys or Chinese equivalents (评级 / 建议)
+        rating_match = re.search(
+            r"(?:\*\*)?(?:Rating|Decision|评级|建议)(?:\*\*)?\s*[:：]\s*(?:\*\*)?([\w一-鿿]+)(?:\*\*)?",
+            decision, re.IGNORECASE,
+        )
+
+        # Entry — English "Entry" or Chinese "入场价 / 买入价 / 目标价"
+        entry_match = re.search(
+            r"(?:\*\*)?(?:Entry|entry_price|入场价|买入价|目标价)(?:\*\*)?\s*[:：]?\s*(?:\*\*)?([\d\-.—]+)(?:\*\*)?",
+            decision, re.IGNORECASE,
+        )
+
+        # Stop — English "Stop" or Chinese "止损价 / 止损"
+        stop_match = re.search(
+            r"(?:\*\*)?(?:Stop|stop_loss|止损价|止损线|止损)(?:\*\*)?\s*[:：]?\s*(?:\*\*)?([\d\-.—]+)(?:\*\*)?",
+            decision, re.IGNORECASE,
+        )
+
+        # Size — English "Size" or Chinese "仓位 / 持仓 / 仓位占比"
+        size_match = re.search(
+            r"(?:\*\*)?(?:Size|position_size|position_sizing|仓位|持仓|持仓比例|仓位占比)(?:\*\*)?\s*[:：]?\s*(?:\*\*)?([\d.%—]+)(?:\*\*)?",
+            decision, re.IGNORECASE,
+        )
+
+        rating_raw = rating_match.group(1) if rating_match else ""
+        # Normalize Chinese ratings through the same mapper memory log uses
+        from tradingagents.agents.utils.rating import parse_rating
+        rating = parse_rating(rating_raw) if rating_raw else "—"
 
         self.summaries[ticker] = {
             "company": company or ticker,
-            "rating": rating_match.group(1) if rating_match else "—",
+            "rating": rating,
             "entry": entry_match.group(1) if entry_match else "—",
             "stop": stop_match.group(1) if stop_match else "—",
             "size": size_match.group(1) if size_match else "—",
