@@ -34,6 +34,13 @@ def yf_retry(func, max_retries=3, base_delay=2.0):
 
 def _clean_dataframe(data: pd.DataFrame) -> pd.DataFrame:
     """Normalize a stock DataFrame for stockstats: parse dates, drop invalid rows, fill price gaps."""
+    # .copy() defensively since yfinance 1.2.0+ returns consolidated (read-only) DataFrames
+    data = data.copy()
+    # yfinance's yf.download() returns an unnamed index, so reset_index() produces
+    # an "index" column instead of "Date". Normalize it here so downstream code
+    # can always assume a "Date" column exists.
+    if "Date" not in data.columns and "index" in data.columns:
+        data = data.rename(columns={"index": "Date"})
     data["Date"] = pd.to_datetime(data["Date"], errors="coerce")
     data = data.dropna(subset=["Date"])
 
@@ -119,7 +126,7 @@ class StockstatsUtils:
         ],
     ):
         data = load_ohlcv(symbol, curr_date)
-        df = wrap(data)
+        df = wrap(data).copy()
         df["Date"] = df["Date"].dt.strftime("%Y-%m-%d")
         curr_date_str = pd.to_datetime(curr_date).strftime("%Y-%m-%d")
 
