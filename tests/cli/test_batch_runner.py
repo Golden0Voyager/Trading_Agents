@@ -89,14 +89,14 @@ def test_refresh_display_invokes_update_when_layout_set(tmp_path):
     runner._layout = MagicMock()
     runner._start_time = 0.0
 
-    with patch("cli.batch_runner.update_batch_display") as mock_update:
+    with patch("cli.batch_runner.update_dashboard_display") as mock_update:
         runner._refresh_display()
         mock_update.assert_called_once()
         # First positional arg is layout, second is dashboard
         args, kwargs = mock_update.call_args
         assert args[0] is runner._layout
         assert args[1] is runner.dashboard
-        assert "elapsed" in kwargs
+        assert "start_time" in kwargs
 
 
 def test_run_single_refreshes_per_chunk(tmp_path):
@@ -139,3 +139,57 @@ def test_run_single_refreshes_per_chunk(tmp_path):
 
     # One refresh per chunk yielded.
     assert mock_refresh.call_count == len(fake_chunks)
+
+
+def test_parallel_run_completes_all_tickers(tmp_path):
+    """With workers > 1, all tickers are processed concurrently."""
+    runner = BatchRunner(
+        tickers=["AAPL", "MSFT", "GOOGL"],
+        profile_config={"llm_provider": "openai", "output_language": "English"},
+        output_dir=tmp_path / "reports",
+        workers=3,
+    )
+    with patch.object(runner, "_run_single") as mock_run:
+        runner.run()
+        assert mock_run.call_count == 3
+    assert len(runner.completed_tickers) == 3
+    assert "AAPL" in runner.completed_tickers
+    assert "MSFT" in runner.completed_tickers
+    assert "GOOGL" in runner.completed_tickers
+
+
+def test_parallel_run_records_failure_without_blocking(tmp_path):
+    """A failing ticker must not block the successful ones in parallel mode."""
+    runner = BatchRunner(
+        tickers=["AAPL", "MSFT", "GOOGL"],
+        profile_config={"llm_provider": "openai", "output_language": "English"},
+        output_dir=tmp_path / "reports",
+        workers=2,
+    )
+
+    def side_effect(ticker):
+        if ticker == "MSFT":
+            raise RuntimeError("API error")
+        import time
+        time.sleep(0.05)
+
+    with patch.object(runner, "_run_single", side_effect=side_effect):
+        runner.run()
+
+    assert runner.failures == {"MSFT": "API error"}
+    assert "MSFT" in runner.completed_tickers
+    assert "AAPL" in runner.completed_tickers
+    assert "GOOGL" in runner.completed_tickers
+
+
+def test_parallel_run_with_workers_1_uses_sequential_path(tmp_path):
+    """workers=1 must route through the sequential path (Live dashboard enabled)."""
+    runner = BatchRunner(
+        tickers=["AAPL"],
+        profile_config={"llm_provider": "openai", "output_language": "English"},
+        output_dir=tmp_path / "reports",
+        workers=1,
+    )
+    with patch.object(runner, "_run_single") as mock_run:
+        runner.run()
+        mock_run.assert_called_once_with("AAPL")
