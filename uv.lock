@@ -2529,7 +2529,7 @@ requires-dist = [
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "typer", specifier = ">=0.21.0" },
     { name = "typing-extensions", specifier = ">=4.14.0" },
-    { name = "yfinance", specifier = ">=0.2.63" },
+    { name = "yfinance", specifier = ">=1.4.0" },
 ]
 
 [[package]]
