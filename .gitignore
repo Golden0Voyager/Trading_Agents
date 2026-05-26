@@ -232,5 +232,9 @@ audit_reports/
 .agents/
 .antigravitycli/
 
+# Skill-generated analysis artifacts
+.understand-anything/
+.codegraph/
+
 # macOS
 .DS_Store
