@@ -14,7 +14,7 @@ DEFAULT_CONFIG = {
     # LLM settings (defaults aligned with personal usage: MiMo)
     "llm_provider": "mimo",
     "deep_think_llm": "mimo-v2.5-pro",
-    "quick_think_llm": "mimo-v2-flash",
+    "quick_think_llm": "mimo-v2.5",
     # MiMo Token Plan endpoint
     "backend_url": "https://token-plan-cn.xiaomimimo.com/v1",
     # Provider-specific thinking configuration
