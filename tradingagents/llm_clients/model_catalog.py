@@ -115,7 +115,6 @@ MODEL_OPTIONS: ProviderModeOptions = {
     },
     "mimo": {
         "quick": [
-            ("mimo-v2-flash - 高速推理", "mimo-v2-flash"),
             ("mimo-v2.5 - 多模态，支持图片输入", "mimo-v2.5"),
             ("mimo-v2.5-pro - 旗舰模型，1M context", "mimo-v2.5-pro"),
             ("自定义模型 ID", "custom"),
@@ -123,7 +122,6 @@ MODEL_OPTIONS: ProviderModeOptions = {
         "deep": [
             ("mimo-v2.5-pro - 旗舰模型，1M context", "mimo-v2.5-pro"),
             ("mimo-v2.5 - 多模态，支持图片输入", "mimo-v2.5"),
-            ("mimo-v2-flash - 高速推理", "mimo-v2-flash"),
             ("自定义模型 ID", "custom"),
         ],
     },
