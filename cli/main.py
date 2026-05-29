@@ -22,6 +22,7 @@ from tradingagents.graph.trading_graph import TradingAgentsGraph
 from tradingagents.default_config import DEFAULT_CONFIG
 from cli.models import AnalystType
 from cli.utils import *
+from cli.utils import ask_workers
 from cli.announcements import fetch_announcements, display_announcements
 from cli.stats_handler import StatsCallbackHandler
 from cli.profiles import save_profile, load_profile, list_profiles
@@ -1338,6 +1339,9 @@ def analyze(
                 # User selected an existing profile — use batch flow with a single ticker
                 run_batch_analysis([ticker_list[0]], profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name, holdings=holdings, workers=workers)
         else:
+            # Ask for worker count in interactive mode (CLI --workers defaults to 1)
+            if workers <= 1:
+                workers = ask_workers()
             run_batch_analysis(ticker_list, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, watchlist_name=watchlist_name, holdings=holdings, workers=workers)
     else:
         # Single / custom mode
@@ -1357,6 +1361,9 @@ def analyze(
                 "anthropic_effort": selections.get("anthropic_effort"),
                 "output_language": selections.get("output_language", "English"),
             }
+            # Ask for worker count in interactive mode (CLI --workers defaults to 1)
+            if workers <= 1:
+                workers = ask_workers()
             run_batch_analysis(tickers, profile_config, checkpoint=checkpoint, output_dir=Path(output_dir) if output_dir else None, holdings=holdings, workers=workers)
         else:
             run_analysis(checkpoint=checkpoint, selections=selections, holdings=holdings)
