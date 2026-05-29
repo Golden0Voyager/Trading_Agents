@@ -248,10 +248,34 @@ def select_deep_thinking_agent(provider) -> str:
     """Select deep thinking llm engine using an interactive selection."""
     return _select_model(provider, "deep")
 
+
+def ask_workers() -> int:
+    """Ask user to choose the number of concurrent workers for batch analysis."""
+    choice = questionary.select(
+        "并发 Worker 数量（每个 Worker 分析一只股票）:",
+        choices=[
+            questionary.Choice("1 — 顺序执行，稳定可靠（首次运行推荐）", value=1),
+            questionary.Choice("2 — 轻量并发，速度翻倍", value=2),
+            questionary.Choice("3 — 中等并发，适合多只股票", value=3),
+            questionary.Choice("5 — 高并发，需确保 API 限流允许", value=5),
+        ],
+        style=questionary.Style([
+            ("selected", "fg:green noinherit"),
+            ("highlighted", "fg:green noinherit"),
+            ("pointer", "fg:green noinherit"),
+        ]),
+    ).ask()
+    if choice is None:
+        console.print("[yellow]未选择，默认使用 1 个 Worker[/yellow]")
+        return 1
+    return choice
+
 def select_llm_provider() -> tuple[str, str | None]:
     """Select the LLM provider and its API endpoint."""
     # (display_name, provider_key, base_url)
     PROVIDERS = [
+        ("MiMo", "mimo", "https://token-plan-cn.xiaomimimo.com/v1"),
+        ("Kimi", "kimi", "https://api.kimi.com/coding/v1"),
         ("SenseNova", "sensenova", "https://api.sensenova.cn/compatible-mode/v2"),
         ("OpenAI", "openai", "https://api.openai.com/v1"),
         ("Google", "google", None),
