@@ -101,6 +101,32 @@ MODEL_OPTIONS: ProviderModeOptions = {
             ("Custom model ID", "custom"),
         ],
     },
+    "kimi": {
+        "quick": [
+            ("kimi-k2.5 - 多模态理解，256K 上下文", "kimi-k2.5"),
+            ("kimi-k2.6 - 最新旗舰，256K 上下文", "kimi-k2.6"),
+            ("自定义模型 ID", "custom"),
+        ],
+        "deep": [
+            ("kimi-k2.6 - 最新旗舰，256K 上下文", "kimi-k2.6"),
+            ("kimi-k2.5 - 多模态理解，256K 上下文", "kimi-k2.5"),
+            ("自定义模型 ID", "custom"),
+        ],
+    },
+    "mimo": {
+        "quick": [
+            ("mimo-v2-flash - 高速推理", "mimo-v2-flash"),
+            ("mimo-v2.5 - 多模态，支持图片输入", "mimo-v2.5"),
+            ("mimo-v2.5-pro - 旗舰模型，1M context", "mimo-v2.5-pro"),
+            ("自定义模型 ID", "custom"),
+        ],
+        "deep": [
+            ("mimo-v2.5-pro - 旗舰模型，1M context", "mimo-v2.5-pro"),
+            ("mimo-v2.5 - 多模态，支持图片输入", "mimo-v2.5"),
+            ("mimo-v2-flash - 高速推理", "mimo-v2-flash"),
+            ("自定义模型 ID", "custom"),
+        ],
+    },
     "sensenova": {
         "quick": [
             ("DeepSeek-V3-1 - 通用对话，快速响应（限时免费至8/9）", "DeepSeek-V3-1"),
