@@ -2,6 +2,7 @@
 
 import logging
 import os
+import time as _time
 from pathlib import Path
 import json
 from datetime import datetime, timedelta
@@ -105,6 +106,7 @@ class TradingAgentsGraph:
         self.quick_thinking_llm = quick_client.get_llm()
         
         self.memory_log = TradingMemoryLog(self.config)
+        self.node_timings: List[Dict[str, Any]] = []
 
         # Create tool nodes
         self.tool_nodes = self._create_tool_nodes()
@@ -367,17 +369,31 @@ class TradingAgentsGraph:
             tid = thread_id(company_name, str(trade_date))
             args.setdefault("config", {}).setdefault("configurable", {})["thread_id"] = tid
 
-        if self.debug:
-            trace = []
-            for chunk in self.graph.stream(init_agent_state, **args):
-                if len(chunk["messages"]) == 0:
-                    pass
-                else:
-                    chunk["messages"][-1].pretty_print()
-                    trace.append(chunk)
-            final_state = trace[-1]
-        else:
-            final_state = self.graph.invoke(init_agent_state, **args)
+        # Always use stream() for per-node timing collection.
+        # Override to "updates" mode so each chunk is {node_name: {changed_fields}}.
+        timings = []
+        merged_state: Dict[str, Any] = dict(init_agent_state)
+        t_stream_start = _time.perf_counter()
+        t_prev = t_stream_start
+        stream_args = {**args, "stream_mode": "updates"}
+        for chunk in self.graph.stream(init_agent_state, **stream_args):
+            t_now = _time.perf_counter()
+            # Each chunk is {node_name: state_update_dict}
+            for node_name, state_update in chunk.items():
+                timings.append({
+                    "node": node_name,
+                    "duration_s": round(t_now - t_prev, 2),
+                })
+                # Merge update into full state
+                if isinstance(state_update, dict):
+                    merged_state.update(state_update)
+            t_prev = t_now
+            if self.debug and merged_state.get("messages"):
+                merged_state["messages"][-1].pretty_print()
+
+        final_state = merged_state
+        self.node_timings = timings
+        self.total_stream_time = round(_time.perf_counter() - t_stream_start, 2)
 
         # Store current state for reflection.
         self.curr_state = final_state
