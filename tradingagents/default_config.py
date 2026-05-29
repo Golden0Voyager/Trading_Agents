@@ -11,12 +11,12 @@ DEFAULT_CONFIG = {
     # the oldest resolved entries are pruned once this limit is exceeded.
     # Pending entries are never pruned. None disables rotation entirely.
     "memory_log_max_entries": None,
-    # LLM settings (defaults aligned with personal usage: SenseNova + DeepSeek)
-    "llm_provider": "sensenova",
-    "deep_think_llm": "DeepSeek-R1",
-    "quick_think_llm": "DeepSeek-V3-1",
-    # SenseNova compatible-mode endpoint
-    "backend_url": "https://api.sensenova.cn/compatible-mode/v2",
+    # LLM settings (defaults aligned with personal usage: MiMo)
+    "llm_provider": "mimo",
+    "deep_think_llm": "mimo-v2.5-pro",
+    "quick_think_llm": "mimo-v2-flash",
+    # MiMo Token Plan endpoint
+    "backend_url": "https://token-plan-cn.xiaomimimo.com/v1",
     # Provider-specific thinking configuration
     "google_thinking_level": None,      # "high", "minimal", etc.
     "openai_reasoning_effort": None,    # "medium", "high", "low"
