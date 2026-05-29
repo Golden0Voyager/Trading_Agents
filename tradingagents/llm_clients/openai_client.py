@@ -137,6 +137,7 @@ class DeepSeekChatOpenAI(NormalizedChatOpenAI):
 _PASSTHROUGH_KWARGS = (
     "timeout", "max_retries", "reasoning_effort",
     "api_key", "callbacks", "http_client", "http_async_client",
+    "default_headers",
 )
 
 # Provider base URLs and API key env vars
@@ -148,6 +149,8 @@ _PROVIDER_CONFIG = {
     "openrouter": ("https://openrouter.ai/api/v1", "OPENROUTER_API_KEY"),
     "ollama": ("http://localhost:11434/v1", None),
     "sensenova": ("https://api.sensenova.cn/compatible-mode/v2", "SENSENOVA_API_KEY"),
+    "mimo": ("https://token-plan-cn.xiaomimimo.com/v1", "MIMO_API_KEY"),
+    "kimi": ("https://api.kimi.com/coding/v1", "KIMI_API_KEY"),
 }
 
 
@@ -196,6 +199,11 @@ class OpenAIClient(BaseLLMClient):
         elif self.base_url:
             llm_kwargs["base_url"] = self.base_url
 
+        # Kimi Coding Plan requires a custom user-agent header for auth
+        if self.provider == "kimi":
+            llm_kwargs.setdefault("default_headers", {})
+            llm_kwargs["default_headers"].setdefault("user-agent", "KimiCLI/1.8.0")
+
         # Forward user-provided kwargs
         for key in _PASSTHROUGH_KWARGS:
             if key in self.kwargs:
@@ -208,7 +216,7 @@ class OpenAIClient(BaseLLMClient):
 
         # DeepSeek's thinking-mode quirks live in their own subclass so the
         # base NormalizedChatOpenAI stays free of provider-specific branches.
-        chat_cls = DeepSeekChatOpenAI if self.provider in ("deepseek", "sensenova") else NormalizedChatOpenAI
+        chat_cls = DeepSeekChatOpenAI if self.provider in ("deepseek", "sensenova", "mimo") else NormalizedChatOpenAI
         return chat_cls(**llm_kwargs)
 
     def validate_model(self) -> bool:
